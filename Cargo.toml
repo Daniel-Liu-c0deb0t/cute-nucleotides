@@ -4,4 +4,11 @@ version = "0.1.0"
 authors = ["c0deb0t <daniel.liu02@gmail.com>"]
 edition = "2018"
 
+[[bench]]
+name = "bench_n_to_bits"
+harness = false
+
 [dependencies]
+
+[dev-dependencies]
+criterion = "0.3"

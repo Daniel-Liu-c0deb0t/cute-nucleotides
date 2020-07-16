@@ -57,13 +57,19 @@ pub fn bits_to_n_lut(bits: &[u64], len: usize) -> Vec<u8> {
 
     unsafe {
         for i in 0..end_idx {
+            let curr = *bits.get_unchecked(i);
+
             for j in 0..32 {
-                res.push(*BITS_LUT.get_unchecked(((*bits.get_unchecked(i) >> (j << 1)) & 0b11) as usize));
+                res.push(*BITS_LUT.get_unchecked(((curr >> (j << 1)) & 0b11) as usize));
             }
         }
 
-        for i in 0..(len - (end_idx << 5)) {
-            res.push(*BITS_LUT.get_unchecked(((*bits.get_unchecked(end_idx) >> (i << 1)) & 0b11) as usize));
+        if (end_idx << 5) < len {
+            let curr = *bits.get_unchecked(end_idx);
+
+            for i in 0..(len - (end_idx << 5)) {
+                res.push(*BITS_LUT.get_unchecked(((curr >> (i << 1)) & 0b11) as usize));
+            }
         }
     }
 

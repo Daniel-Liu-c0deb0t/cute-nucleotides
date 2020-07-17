@@ -154,30 +154,50 @@ pub fn n_to_bits_mul(n: &[u8]) -> Vec<u64> {
     res
 }
 
-/*pub fn bits_to_n_shuffle(b: &[u64], len: usize) -> Vec<u8> {
-    return unimplemented!();
-
-    let end_idx = len >> 6;
-    let mut res = vec![];
-
-    let nybble_mask = 0x0F0F0F0F0F0F0F0F;
-
-    unsafe {
-        for i in 0..end_idx {
-            let curr = *b.get_unchecked(i);
-            let v = _mm256_loadu_si256(ptr.offset(i));
-            
-            let a = _mm256_shuffle_epi8(nybbles1, nybble_lut);
-            let b = _mm256_shuffle_epi8(nybbles2, nybble_lut);
-            let c = _mm256_shuffle_epi8(nybbles3, nybble_lut);
-            let d = _mm256_shuffle_epi8(nybbles4, nybble_lut);
-        }
+pub fn bits_to_n_shuffle(bits: &[u64], len: usize) -> Vec<u8> {
+    if len > (bits.len() << 5) {
+        panic!("The length is greater than the number of nucleotides!");
     }
 
-    // TODO: handle leftover bytes
+    unsafe {
+        let layout = alloc::Layout::from_size_align_unchecked(bits.len() << 5, 32);
+        let ptr = alloc::alloc(layout) as *mut __m256i;
 
-    res
-}*/
+        let shuffle_mask = _mm256_set_epi32(0x07070707, 0x06060606, 0x05050505, 0x04040404, 0x03030303, 0x02020202, 0x01010101, 0x00000000);
+        let shift1 = _mm256_set1_epi32(0);
+        let shift2 = _mm256_set1_epi32(2);
+        let shift3 = _mm256_set1_epi32(4);
+        let shift4 = _mm256_set1_epi32(6);
+        let blend_mask8 = _mm256_set1_epi16(0xFF00u16 as i16);
+        let blend_mask16 = _mm256_set1_epi32(0xFFFF0000u32 as i32);
+        let lo_mask = _mm256_set1_epi8(0b00000011);
+        let lut_i32 = (b'A' as i32) | ((b'C' as i32) << 8) | ((b'T' as i32) << 16) | ((b'G' as i32) << 24);
+        let lut = _mm256_set_epi32(0, 0, 0, lut_i32, 0, 0, 0, lut_i32);
+
+        for i in 0..bits.len() {
+            let curr = *bits.get_unchecked(i) as i64;
+            let v = _mm256_set1_epi64x(curr);
+            // duplicate each byte four times
+            let v = _mm256_shuffle_epi8(v, shuffle_mask);
+            // separately right shift each 32-bit chunk by 0, 2, 4, and 6 bits
+            let a = _mm256_srlv_epi32(v, shift1);
+            let b = _mm256_srlv_epi32(v, shift2);
+            let c = _mm256_srlv_epi32(v, shift3);
+            let d = _mm256_srlv_epi32(v, shift4);
+            // merge together shifted chunks
+            let ab = _mm256_blendv_epi8(a, b, blend_mask8);
+            let cd = _mm256_blendv_epi8(c, d, blend_mask8);
+            let abcd = _mm256_blendv_epi8(ab, cd, blend_mask16);
+            // only keep the two low bits per byte
+            let v = _mm256_and_si256(abcd, lo_mask);
+            // use lookup table to convert nucleotide bits to bytes
+            let v = _mm256_shuffle_epi8(lut, v);
+            _mm256_store_si256(ptr.offset(i as isize), v);
+        }
+
+        Vec::from_raw_parts(ptr as *mut u8, len, bits.len() << 5)
+    }
+}
 
 pub fn bits_to_n_pdep(bits: &[u64], len: usize) -> Vec<u8> {
     if len > (bits.len() << 5) {
@@ -241,6 +261,12 @@ mod tests {
         assert_eq!(n_to_bits_mul(b"ATCGATCGATCGATCGATCGATCGATCGATCG"),
                 vec![0b1101100011011000110110001101100011011000110110001101100011011000]);
 	assert_eq!(n_to_bits_mul(b"ATCG"), vec![0b11011000]);
+    }
+
+    #[test]
+    fn test_bits_to_n_shuffle() {
+        assert_eq!(bits_to_n_shuffle(&vec![0b1101100011011000110110001101100011011000110110001101100011011000], 32),
+                b"ATCGATCGATCGATCGATCGATCGATCGATCG");
     }
 
     #[test]

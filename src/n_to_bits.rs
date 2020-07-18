@@ -47,33 +47,19 @@ pub fn bits_to_n_lut(bits: &[u64], len: usize) -> Vec<u8> {
         panic!("The length is greater than the number of nucleotides!");
     }
 
-    let end_idx = if len < (bits.len() << 5) {
-        bits.len() - 1
-    } else {
-        bits.len()
-    };
-
-    let mut res = Vec::with_capacity(len);
-
     unsafe {
-        for i in 0..end_idx {
-            let curr = *bits.get_unchecked(i);
+        let layout = alloc::Layout::from_size_align_unchecked(len, 1);
+        let res_ptr = alloc::alloc(layout);
 
-            for j in 0..32 {
-                res.push(*BITS_LUT.get_unchecked(((curr >> (j << 1)) & 0b11) as usize));
-            }
+        for i in 0..len {
+            let offset = i >> 5;
+            let shift = (i & 31) << 1;
+            let curr = *bits.get_unchecked(offset);
+            *res_ptr.offset(i as isize) = *BITS_LUT.get_unchecked(((curr >> shift) & 0b11) as usize);
         }
 
-        if (end_idx << 5) < len {
-            let curr = *bits.get_unchecked(end_idx);
-
-            for i in 0..(len - (end_idx << 5)) {
-                res.push(*BITS_LUT.get_unchecked(((curr >> (i << 1)) & 0b11) as usize));
-            }
-        }
+        Vec::from_raw_parts(res_ptr, len, len)
     }
-
-    res
 }
 
 union AlignedArray {
@@ -84,11 +70,14 @@ union AlignedArray {
 pub fn n_to_bits_pext(n: &[u8]) -> Vec<u64> {
     let ptr = n.as_ptr() as *const __m256i;
     let end_idx = n.len() >> 5;
-    let mut res = Vec::with_capacity(end_idx + if n.len() & 31 == 0 {0} else {1});
+    let len = end_idx + if n.len() & 31 == 0 {0} else {1};
 
     let ascii_mask = 0x0606060606060606; // 0b...00000110
 
     unsafe {
+        let layout = alloc::Layout::from_size_align_unchecked(len << 5, 8);
+        let res_ptr = alloc::alloc(layout) as *mut u64;
+
         let mut arr = AlignedArray{v: _mm256_undefined_si256()};
 
         for i in 0..end_idx as isize {
@@ -103,23 +92,26 @@ pub fn n_to_bits_pext(n: &[u8]) -> Vec<u64> {
             let d = _pext_u64(arr.a[3], ascii_mask);
 
             // combine low 16 bits in each 64 bit chunk
-            res.push(a | (b << 16) | (c << 32) | (d << 48));
+            *res_ptr.offset(i) = a | (b << 16) | (c << 32) | (d << 48);
         }
 
         if n.len() & 31 > 0 {
-            res.push(*n_to_bits_lut(&n[end_idx..]).get_unchecked(0));
+            *res_ptr.offset(end_idx as isize) = *n_to_bits_lut(&n[end_idx..]).get_unchecked(0);
         }
-    }
 
-    res
+        Vec::from_raw_parts(res_ptr, len, len)
+    }
 }
 
 pub fn n_to_bits_mul(n: &[u8]) -> Vec<u64> {
     let ptr = n.as_ptr() as *const __m256i;
     let end_idx = n.len() >> 5;
-    let mut res = Vec::with_capacity(end_idx + if n.len() & 31 == 0 {0} else {1});
+    let len = end_idx + if n.len() & 31 == 0 {0} else {1};
 
     unsafe {
+        let layout = alloc::Layout::from_size_align_unchecked(len << 5, 8);
+        let res_ptr = alloc::alloc(layout) as *mut u64;
+
         let ascii_mask = _mm256_set1_epi8(0b00000110);
         let mul_mask = {
             let mut m = 0u32;
@@ -143,15 +135,15 @@ pub fn n_to_bits_mul(n: &[u8]) -> Vec<u64> {
             // extract last 8 bits of every 32 bit integer
             arr.v = _mm256_shuffle_epi8(arr.v, shuffle_mask);
             // combine first 32 bits from both lanes
-            res.push(arr.a[0] | (arr.a[2] << 32));
+            *res_ptr.offset(i) = arr.a[0] | (arr.a[2] << 32);
         }
 
         if n.len() & 31 > 0 {
-            res.push(*n_to_bits_lut(&n[end_idx..]).get_unchecked(0));
+            *res_ptr.offset(end_idx as isize) = *n_to_bits_lut(&n[end_idx..]).get_unchecked(0);
         }
-    }
 
-    res
+        Vec::from_raw_parts(res_ptr, len, len)
+    }
 }
 
 pub fn bits_to_n_shuffle(bits: &[u64], len: usize) -> Vec<u8> {
@@ -169,7 +161,6 @@ pub fn bits_to_n_shuffle(bits: &[u64], len: usize) -> Vec<u8> {
         let shift3 = _mm256_set1_epi32(4);
         let shift4 = _mm256_set1_epi32(6);
         let blend_mask8 = _mm256_set1_epi16(0xFF00u16 as i16);
-        let blend_mask16 = _mm256_set1_epi32(0xFFFF0000u32 as i32);
         let lo_mask = _mm256_set1_epi8(0b00000011);
         let lut_i32 = (b'A' as i32) | ((b'C' as i32) << 8) | ((b'T' as i32) << 16) | ((b'G' as i32) << 24);
         let lut = _mm256_set_epi32(0, 0, 0, lut_i32, 0, 0, 0, lut_i32);
@@ -187,7 +178,7 @@ pub fn bits_to_n_shuffle(bits: &[u64], len: usize) -> Vec<u8> {
             // merge together shifted chunks
             let ab = _mm256_blendv_epi8(a, b, blend_mask8);
             let cd = _mm256_blendv_epi8(c, d, blend_mask8);
-            let abcd = _mm256_blendv_epi8(ab, cd, blend_mask16);
+            let abcd = _mm256_blend_epi16(ab, cd, 0b10101010i32);
             // only keep the two low bits per byte
             let v = _mm256_and_si256(abcd, lo_mask);
             // use lookup table to convert nucleotide bits to bytes
@@ -230,6 +221,62 @@ pub fn bits_to_n_pdep(bits: &[u64], len: usize) -> Vec<u8> {
     }
 }
 
+pub fn bits_to_n_clmul(bits: &[u64], len: usize) -> Vec<u8> {
+    if len > (bits.len() << 5) {
+        panic!("The length is greater than the number of nucleotides!");
+    }
+
+    unsafe {
+        _mm256_zeroupper();
+
+        let layout = alloc::Layout::from_size_align_unchecked(bits.len() << 5, 16);
+        let ptr = alloc::alloc(layout) as *mut __m128i;
+
+        let lo_shuffle_mask = _mm_set_epi32(0xFFFFFF03u32 as i32, 0xFFFFFF02u32 as i32, 0xFFFFFF01u32 as i32, 0xFFFFFF00u32 as i32);
+        let hi_shuffle_mask = _mm_set_epi32(0xFFFFFF07u32 as i32, 0xFFFFFF06u32 as i32, 0xFFFFFF05u32 as i32, 0xFFFFFF04u32 as i32);
+        let mul_mask = {
+            let mut m = 0u64;
+            // m |= 1 << (byte offset - bit offset);
+            m |= 1 << ( 0 - 0);
+            m |= 1 << ( 8 - 2);
+            m |= 1 << (16 - 4);
+            m |= 1 << (24 - 6);
+            _mm_set_epi64x(0, m as i64)
+        };
+        let lo_mask = _mm_set1_epi8(0b00000011);
+        let lut_i32 = (b'A' as i32) | ((b'C' as i32) << 8) | ((b'T' as i32) << 16) | ((b'G' as i32) << 24);
+        let lut = _mm_set_epi32(0, 0, 0, lut_i32);
+
+        for i in 0..bits.len() {
+            let curr = *bits.get_unchecked(i) as i64;
+            let v = _mm_set1_epi64x(curr);
+            // spread out bytes
+            let lo_v = _mm_shuffle_epi8(v, lo_shuffle_mask);
+            let hi_v = _mm_shuffle_epi8(v, hi_shuffle_mask);
+            // multiply by mask to shift to correct positions
+            // handle 64 bit chunks separately
+            let lo_v1 = _mm_clmulepi64_si128(lo_v, mul_mask, 0x00);
+            let lo_v2 = _mm_clmulepi64_si128(lo_v, mul_mask, 0x0F);
+            let hi_v1 = _mm_clmulepi64_si128(hi_v, mul_mask, 0x00);
+            let hi_v2 = _mm_clmulepi64_si128(hi_v, mul_mask, 0x0F);
+            // combine low and high chunks of 64 bits
+            // casts are free
+            let lo_v = _mm_castps_si128(_mm_movelh_ps(_mm_castsi128_ps(lo_v1), _mm_castsi128_ps(lo_v2)));
+            let hi_v = _mm_castps_si128(_mm_movelh_ps(_mm_castsi128_ps(hi_v1), _mm_castsi128_ps(hi_v2)));
+            // only keep the two low bits per byte
+            let lo_v = _mm_and_si128(lo_v, lo_mask);
+            let hi_v = _mm_and_si128(hi_v, lo_mask);
+            // use lookup table to convert nucleotide bits to bytes
+            let lo_v = _mm_shuffle_epi8(lut, lo_v);
+            let hi_v = _mm_shuffle_epi8(lut, hi_v);
+            _mm_store_si128(ptr.offset((i << 1) as isize), lo_v);
+            _mm_store_si128(ptr.offset(((i << 1) + 1) as isize), hi_v);
+        }
+
+        Vec::from_raw_parts(ptr as *mut u8, len, bits.len() << 5)
+    }
+}
+
 // A = 00, T = 10, C = 01, G = 11
 
 #[cfg(test)]
@@ -240,7 +287,7 @@ mod tests {
     fn test_n_to_bits_lut() {
         assert_eq!(n_to_bits_lut(b"ATCGATCGATCGATCGATCGATCGATCGATCG"),
                 vec![0b1101100011011000110110001101100011011000110110001101100011011000]);
-	assert_eq!(n_to_bits_lut(b"ATCG"), vec![0b11011000]);
+        assert_eq!(n_to_bits_lut(b"ATCG"), vec![0b11011000]);
     }
 
     #[test]
@@ -253,14 +300,14 @@ mod tests {
     fn test_n_to_bits_pext() {
         assert_eq!(n_to_bits_pext(b"ATCGATCGATCGATCGATCGATCGATCGATCG"),
                 vec![0b1101100011011000110110001101100011011000110110001101100011011000]);
-	assert_eq!(n_to_bits_pext(b"ATCG"), vec![0b11011000]);
+        assert_eq!(n_to_bits_pext(b"ATCG"), vec![0b11011000]);
     }
 
     #[test]
     fn test_n_to_bits_mul() {
         assert_eq!(n_to_bits_mul(b"ATCGATCGATCGATCGATCGATCGATCGATCG"),
                 vec![0b1101100011011000110110001101100011011000110110001101100011011000]);
-	assert_eq!(n_to_bits_mul(b"ATCG"), vec![0b11011000]);
+        assert_eq!(n_to_bits_mul(b"ATCG"), vec![0b11011000]);
     }
 
     #[test]
@@ -272,6 +319,12 @@ mod tests {
     #[test]
     fn test_bits_to_n_pdep() {
         assert_eq!(bits_to_n_pdep(&vec![0b1101100011011000110110001101100011011000110110001101100011011000], 32),
+                b"ATCGATCGATCGATCGATCGATCGATCGATCG");
+    }
+
+    #[test]
+    fn test_bits_to_n_clmul() {
+        assert_eq!(bits_to_n_clmul(&vec![0b1101100011011000110110001101100011011000110110001101100011011000], 32),
                 b"ATCGATCGATCGATCGATCGATCGATCGATCG");
     }
 }

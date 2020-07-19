@@ -67,75 +67,51 @@ union AlignedArray {
     a: [u64; 4]
 }
 
-pub fn n_to_bits_pext(n: &[u8]) -> Vec<u64> {
-    let ptr = n.as_ptr() as *const __m256i;
+pub fn n_to_bits2_pext(n: &[u8]) -> Vec<u64> {
+    let mut ptr = n.as_ptr();
     let end_idx = n.len() >> 5;
     let len = end_idx + if n.len() & 31 == 0 {0} else {1};
 
-    let ascii_mask = 0x0606060606060606; // 0b...00000110
+    let pack_right_mask = 0x007F007F007F007Fu64; // 0b...0000000001111111
 
     unsafe {
         let layout = alloc::Layout::from_size_align_unchecked(len << 5, 8);
         let res_ptr = alloc::alloc(layout) as *mut u64;
 
-        let mut arr = AlignedArray{v: _mm256_undefined_si256()};
-
-        for i in 0..end_idx as isize {
-            // fast conversion of unaligned data to aligned
-            arr.v = _mm256_loadu_si256(ptr.offset(i));
-
-            // ascii_mask uses a special property of ATCG ASCII characters in binary
-            // hide latency
-            let a = _pext_u64(arr.a[0], ascii_mask);
-            let b = _pext_u64(arr.a[1], ascii_mask);
-            let c = _pext_u64(arr.a[2], ascii_mask);
-            let d = _pext_u64(arr.a[3], ascii_mask);
-
-            // combine low 16 bits in each 64 bit chunk
-            *res_ptr.offset(i) = a | (b << 16) | (c << 32) | (d << 48);
-        }
-
-        if n.len() & 31 > 0 {
-            *res_ptr.offset(end_idx as isize) = *n_to_bits_lut(&n[end_idx..]).get_unchecked(0);
-        }
-
-        Vec::from_raw_parts(res_ptr, len, len)
-    }
-}
-
-pub fn n_to_bits_mul(n: &[u8]) -> Vec<u64> {
-    let ptr = n.as_ptr() as *const __m256i;
-    let end_idx = n.len() >> 5;
-    let len = end_idx + if n.len() & 31 == 0 {0} else {1};
-
-    unsafe {
-        let layout = alloc::Layout::from_size_align_unchecked(len << 5, 8);
-        let res_ptr = alloc::alloc(layout) as *mut u64;
-
-        let ascii_mask = _mm256_set1_epi8(0b00000110);
-        let mul_mask = {
-            let mut m = 0u32;
-            // m |= 1 << (length - input byte offset + output bit offset - 1 LSB to ignore);
-            m |= 1 << (32 -  8 + 0 - 1);
-            m |= 1 << (32 - 16 + 2 - 1);
-            m |= 1 << (32 - 24 + 4 - 1);
-            m |= 1 << (32 - 32 + 6 - 1);
-            _mm256_set1_epi32(m as i32)
-        };
-        let shuffle_mask = _mm256_set_epi32(-1, -1, -1, 0x0F0B0703, -1, -1, -1, 0x0F0B0703);
+        let lut = _mm256_set1_epi64x(0x0002030401000000);
+        let permute_mask = _mm256_set_epi32(6, 5, 4, 3, 3, 2, 1, 0);
+        let shuffle_mask1 = _mm256_set_epi16(-1, -1, -1, -1, 28, 25, 22, 19, -1, -1, -1, 12,  9,  6,  3,  0);
+        let shuffle_mask2 = _mm256_set_epi16(-1, -1, -1, -1, 29, 26, 23, 20, -1, -1, -1, 13, 10,  7,  4,  1);
+        let shuffle_mask3 = _mm256_set_epi16(-1, -1, -1, -1, 30, 27, 24, 21, -1, -1, -1, 14, 11,  8,  5,  2);
+        let mul5 = _mm256_set1_epi16(5);
+        let mul25 = _mm256_set1_epi16(25);
 
         let mut arr = AlignedArray{v: _mm256_undefined_si256()};
 
         for i in 0..end_idx as isize {
-            let v = _mm256_loadu_si256(ptr.offset(i));
-            // mask out unimportant bits
-            let v = _mm256_and_si256(v, ascii_mask);
-            // multiply to pack left exactly 4 nucleotides (8 bits)
-            let v = _mm256_mullo_epi32(v, mul_mask);
-            // extract last 8 bits of every 32 bit integer
-            arr.v = _mm256_shuffle_epi8(v, shuffle_mask);
-            // combine first 32 bits from both lanes
-            *res_ptr.offset(i) = arr.a[0] | (arr.a[2] << 32);
+            let v = _mm256_loadu_si256(ptr as *const __m256i);
+
+            let v = _mm256_shuffle_epi8(lut, v);
+            let v = _mm256_permutevar8x32_epi32(v, permute_mask);
+
+            let a = _mm256_shuffle_epi8(v, shuffle_mask1);
+            let b = _mm256_shuffle_epi8(v, shuffle_mask2);
+            let c = _mm256_shuffle_epi8(v, shuffle_mask3);
+
+            let b = _mm256_mullo_epi16(v, mul5);
+            let c = _mm256_mullo_epi16(v, mul25);
+
+            let ab = _mm256_add_epi16(a, b);
+            arr.v = _mm256_add_epi16(ab, c);
+
+            let a = _pext_u64(arr.a[0], pack_right_mask);
+            let b = arr.a[1];
+            let c = _pext_u64(arr.a[2], pack_right_mask);
+
+            // combine a, b, and c into a 63 bit chunk
+            *res_ptr.offset(i) = a | (b << 28) | (c << 35);
+
+            ptr = ptr.offset(27);
         }
 
         if n.len() & 31 > 0 {
@@ -156,22 +132,31 @@ pub fn bits_to_n_shuffle(bits: &[u64], len: usize) -> Vec<u8> {
         let ptr = alloc::alloc(layout) as *mut __m256i;
 
         let shuffle_mask = _mm256_set_epi32(0x07070707, 0x06060606, 0x05050505, 0x04040404, 0x03030303, 0x02020202, 0x01010101, 0x00000000);
-        let lo_mask = _mm256_set1_epi16(0b0000110000000011);
+        let shift1 = _mm256_set1_epi32(0);
+        let shift2 = _mm256_set1_epi32(2);
+        let shift3 = _mm256_set1_epi32(4);
+        let shift4 = _mm256_set1_epi32(6);
+        let blend_mask8 = _mm256_set1_epi16(0xFF00u16 as i16);
+        let lo_mask = _mm256_set1_epi8(0b00000011);
         let lut_i32 = (b'A' as i32) | ((b'C' as i32) << 8) | ((b'T' as i32) << 16) | ((b'G' as i32) << 24);
-        let lut = _mm256_set_epi32(b'G' as i32, b'T' as i32, b'C' as i32, lut_i32, b'G' as i32, b'T' as i32, b'C' as i32, lut_i32);
+        let lut = _mm256_set_epi32(0, 0, 0, lut_i32, 0, 0, 0, lut_i32);
 
         for i in 0..bits.len() {
             let curr = *bits.get_unchecked(i) as i64;
             let v = _mm256_set1_epi64x(curr);
             // duplicate each byte four times
-            let v1 = _mm256_shuffle_epi8(v, shuffle_mask);
-            // separately right shift each 16-bit chunk by 0 or 4 bits
-            let v2 = _mm256_srli_epi16(v1, 4);
+            let v = _mm256_shuffle_epi8(v, shuffle_mask);
+            // separately right shift each 32-bit chunk by 0, 2, 4, and 6 bits
+            let a = _mm256_srlv_epi32(v, shift1);
+            let b = _mm256_srlv_epi32(v, shift2);
+            let c = _mm256_srlv_epi32(v, shift3);
+            let d = _mm256_srlv_epi32(v, shift4);
             // merge together shifted chunks
-            let v = _mm256_blend_epi16(v1, v2, 0b10101010i32);
-            // only keep two bits in each byte
-            // either 0b0011 or 0b1100
-            let v = _mm256_and_si256(v, lo_mask);
+            let ab = _mm256_blendv_epi8(a, b, blend_mask8);
+            let cd = _mm256_blendv_epi8(c, d, blend_mask8);
+            let abcd = _mm256_blend_epi16(ab, cd, 0b10101010i32);
+            // only keep the two low bits per byte
+            let v = _mm256_and_si256(abcd, lo_mask);
             // use lookup table to convert nucleotide bits to bytes
             let v = _mm256_shuffle_epi8(lut, v);
             _mm256_store_si256(ptr.offset(i as isize), v);
@@ -211,63 +196,6 @@ pub fn bits_to_n_pdep(bits: &[u64], len: usize) -> Vec<u8> {
         Vec::from_raw_parts(ptr as *mut u8, len, bits.len() << 5)
     }
 }
-
-pub fn bits_to_n_clmul(bits: &[u64], len: usize) -> Vec<u8> {
-    if len > (bits.len() << 5) {
-        panic!("The length is greater than the number of nucleotides!");
-    }
-
-    unsafe {
-        let layout = alloc::Layout::from_size_align_unchecked(bits.len() << 5, 16);
-        let ptr = alloc::alloc(layout) as *mut __m128i;
-
-        let lo_shuffle_mask = _mm_set_epi32(0xFFFFFF03u32 as i32, 0xFFFFFF02u32 as i32, 0xFFFFFF01u32 as i32, 0xFFFFFF00u32 as i32);
-        let hi_shuffle_mask = _mm_set_epi32(0xFFFFFF07u32 as i32, 0xFFFFFF06u32 as i32, 0xFFFFFF05u32 as i32, 0xFFFFFF04u32 as i32);
-        let mul_mask = {
-            let mut m = 0u64;
-            // m |= 1 << (byte offset - bit offset);
-            m |= 1 << ( 0 - 0);
-            m |= 1 << ( 8 - 2);
-            m |= 1 << (16 - 4);
-            m |= 1 << (24 - 6);
-            _mm_set_epi64x(0, m as i64)
-        };
-        let lo_mask = _mm_set1_epi8(0b00000011);
-        let lut_i32 = (b'A' as i32) | ((b'C' as i32) << 8) | ((b'T' as i32) << 16) | ((b'G' as i32) << 24);
-        let lut = _mm_set1_epi32(lut_i32);
-
-        for i in 0..bits.len() {
-            let curr = *bits.get_unchecked(i) as i64;
-            let v = _mm_set1_epi64x(curr);
-            // spread out bytes to the low 8 bits of each 32 bit chunk
-            let lo_v = _mm_shuffle_epi8(v, lo_shuffle_mask);
-            let hi_v = _mm_shuffle_epi8(v, hi_shuffle_mask);
-            // multiply by mask to shift to correct positions
-            // carry-less multiply will ensure that separate bytes do not interfere with each other
-            // handle 64 bit chunks separately
-            let lo_v1 = _mm_clmulepi64_si128(lo_v, mul_mask, 0x00);
-            let lo_v2 = _mm_clmulepi64_si128(lo_v, mul_mask, 0x0F);
-            let hi_v1 = _mm_clmulepi64_si128(hi_v, mul_mask, 0x00);
-            let hi_v2 = _mm_clmulepi64_si128(hi_v, mul_mask, 0x0F);
-            // combine the two low chunks of 64 bits into 128 bit vectors
-            // casts are free
-            let lo_v = _mm_castps_si128(_mm_movelh_ps(_mm_castsi128_ps(lo_v1), _mm_castsi128_ps(lo_v2)));
-            let hi_v = _mm_castps_si128(_mm_movelh_ps(_mm_castsi128_ps(hi_v1), _mm_castsi128_ps(hi_v2)));
-            // only keep low bits
-            let lo_v = _mm_and_si128(lo_v, lo_mask);
-            let hi_v = _mm_and_si128(hi_v, lo_mask);
-            // use lookup table to convert nucleotide bits to bytes
-            let lo_v = _mm_shuffle_epi8(lut, lo_v);
-            let hi_v = _mm_shuffle_epi8(lut, hi_v);
-            _mm_store_si128(ptr.offset((i << 1) as isize), lo_v);
-            _mm_store_si128(ptr.offset(((i << 1) + 1) as isize), hi_v);
-        }
-
-        Vec::from_raw_parts(ptr as *mut u8, len, bits.len() << 5)
-    }
-}
-
-// A = 00, T = 10, C = 01, G = 11
 
 #[cfg(test)]
 mod tests {

@@ -112,7 +112,7 @@ pub fn n_to_bits2_pext(n: &[u8]) -> Vec<u64> {
         let mul25 = _mm256_set1_epi16(25);
         let pack_right_mask = 0x007F007F007F007Fu64; // 0b...0000000001111111
 
-        let mut arr = AlignedArray{v: _mm256_undefined_si256()};
+        let mut arr = [AlignedArray{v: _mm256_undefined_si256()}, AlignedArray{v: _mm256_undefined_si256()}];
 
         for i in 0..end_idx as isize {
             let v = _mm256_loadu_si256(ptr as *const __m256i);
@@ -128,11 +128,12 @@ pub fn n_to_bits2_pext(n: &[u8]) -> Vec<u64> {
             let c = _mm256_mullo_epi16(c, mul25);
 
             let ab = _mm256_add_epi16(a, b);
-            arr.v = _mm256_add_epi16(ab, c);
+            let arr_idx = (i as usize) & 1;
+            (*arr.get_unchecked_mut(arr_idx)).v = _mm256_add_epi16(ab, c);
 
-            let a = _pext_u64(arr.a[0], pack_right_mask);
-            let b = arr.a[1];
-            let c = _pext_u64(arr.a[2], pack_right_mask);
+            let a = _pext_u64((*arr.get_unchecked(arr_idx)).a[0], pack_right_mask);
+            let b = (*arr.get_unchecked(arr_idx)).a[1];
+            let c = _pext_u64((*arr.get_unchecked(arr_idx)).a[2], pack_right_mask);
 
             // combine a, b, and c into a 63 bit chunk
             *res_ptr.offset(i) = a | (b << 28) | (c << 35);

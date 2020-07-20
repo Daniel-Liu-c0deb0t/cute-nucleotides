@@ -78,18 +78,19 @@ pub fn n_to_bits_pext(n: &[u8]) -> Vec<u64> {
         let layout = alloc::Layout::from_size_align_unchecked(len << 3, 8);
         let res_ptr = alloc::alloc(layout) as *mut u64;
 
-        let mut arr = AlignedArray{v: _mm256_undefined_si256()};
+        let mut arr = [AlignedArray{v: _mm256_undefined_si256()}, AlignedArray{v: _mm256_undefined_si256()}];
 
         for i in 0..end_idx as isize {
+            let arr_idx = (i as usize) & 1;
             // fast conversion of unaligned data to aligned
-            arr.v = _mm256_loadu_si256(ptr.offset(i));
+            (*arr.get_unchecked_mut(arr_idx)).v = _mm256_loadu_si256(ptr.offset(i));
 
             // ascii_mask uses a special property of ATCG ASCII characters in binary
             // hide latency
-            let a = _pext_u64(arr.a[0], ascii_mask);
-            let b = _pext_u64(arr.a[1], ascii_mask);
-            let c = _pext_u64(arr.a[2], ascii_mask);
-            let d = _pext_u64(arr.a[3], ascii_mask);
+            let a = _pext_u64((*arr.get_unchecked(arr_idx)).a[0], ascii_mask);
+            let b = _pext_u64((*arr.get_unchecked(arr_idx)).a[1], ascii_mask);
+            let c = _pext_u64((*arr.get_unchecked(arr_idx)).a[2], ascii_mask);
+            let d = _pext_u64((*arr.get_unchecked(arr_idx)).a[3], ascii_mask);
 
             // combine low 16 bits in each 64 bit chunk
             *res_ptr.offset(i) = a | (b << 16) | (c << 32) | (d << 48);
@@ -124,7 +125,7 @@ pub fn n_to_bits_mul(n: &[u8]) -> Vec<u64> {
         };
         let shuffle_mask = _mm256_set_epi32(-1, -1, -1, 0x0F0B0703, -1, -1, -1, 0x0F0B0703);
 
-        let mut arr = AlignedArray{v: _mm256_undefined_si256()};
+        let mut arr = [AlignedArray{v: _mm256_undefined_si256()}, AlignedArray{v: _mm256_undefined_si256()}];
 
         for i in 0..end_idx as isize {
             let v = _mm256_loadu_si256(ptr.offset(i));
@@ -132,10 +133,11 @@ pub fn n_to_bits_mul(n: &[u8]) -> Vec<u64> {
             let v = _mm256_and_si256(v, ascii_mask);
             // multiply to pack left exactly 4 nucleotides (8 bits)
             let v = _mm256_mullo_epi32(v, mul_mask);
+            let arr_idx = (i as usize) & 1;
             // extract last 8 bits of every 32 bit integer
-            arr.v = _mm256_shuffle_epi8(v, shuffle_mask);
+            (*arr.get_unchecked_mut(arr_idx)).v = _mm256_shuffle_epi8(v, shuffle_mask);
             // combine first 32 bits from both lanes
-            *res_ptr.offset(i) = arr.a[0] | (arr.a[2] << 32);
+            *res_ptr.offset(i) = (*arr.get_unchecked(arr_idx)).a[0] | ((*arr.get_unchecked(arr_idx)).a[2] << 32);
         }
 
         if n.len() & 31 > 0 {

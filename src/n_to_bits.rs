@@ -75,7 +75,7 @@ pub fn n_to_bits_pext(n: &[u8]) -> Vec<u64> {
     let ascii_mask = 0x0606060606060606; // 0b...00000110
 
     unsafe {
-        let layout = alloc::Layout::from_size_align_unchecked(len << 5, 8);
+        let layout = alloc::Layout::from_size_align_unchecked(len << 3, 8);
         let res_ptr = alloc::alloc(layout) as *mut u64;
 
         let mut arr = AlignedArray{v: _mm256_undefined_si256()};
@@ -96,7 +96,7 @@ pub fn n_to_bits_pext(n: &[u8]) -> Vec<u64> {
         }
 
         if n.len() & 31 > 0 {
-            *res_ptr.offset(end_idx as isize) = *n_to_bits_lut(&n[end_idx..]).get_unchecked(0);
+            *res_ptr.offset(end_idx as isize) = *n_to_bits_lut(&n[(end_idx << 5)..]).get_unchecked(0);
         }
 
         Vec::from_raw_parts(res_ptr, len, len)
@@ -109,7 +109,7 @@ pub fn n_to_bits_mul(n: &[u8]) -> Vec<u64> {
     let len = end_idx + if n.len() & 31 == 0 {0} else {1};
 
     unsafe {
-        let layout = alloc::Layout::from_size_align_unchecked(len << 5, 8);
+        let layout = alloc::Layout::from_size_align_unchecked(len << 3, 8);
         let res_ptr = alloc::alloc(layout) as *mut u64;
 
         let ascii_mask = _mm256_set1_epi8(0b00000110);
@@ -139,7 +139,7 @@ pub fn n_to_bits_mul(n: &[u8]) -> Vec<u64> {
         }
 
         if n.len() & 31 > 0 {
-            *res_ptr.offset(end_idx as isize) = *n_to_bits_lut(&n[end_idx..]).get_unchecked(0);
+            *res_ptr.offset(end_idx as isize) = *n_to_bits_lut(&n[(end_idx << 5)..]).get_unchecked(0);
         }
 
         Vec::from_raw_parts(res_ptr, len, len)

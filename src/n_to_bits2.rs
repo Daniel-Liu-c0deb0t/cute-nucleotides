@@ -7,42 +7,61 @@ use std::alloc;
 
 static BYTE_LUT: [u8; 128] = {
     let mut lut = [0u8; 128];
-    lut[b'a' as usize] = 0b00;
-    lut[b't' as usize] = 0b10;
-    lut[b'c' as usize] = 0b01;
-    lut[b'g' as usize] = 0b11;
-    lut[b'A' as usize] = 0b00;
-    lut[b'T' as usize] = 0b10;
-    lut[b'C' as usize] = 0b01;
-    lut[b'G' as usize] = 0b11;
+    lut[b'a' as usize] = 0b000;
+    lut[b'c' as usize] = 0b001;
+    lut[b'g' as usize] = 0b010;
+    lut[b'n' as usize] = 0b011;
+    lut[b't' as usize] = 0b100;
+    lut[b'A' as usize] = 0b000;
+    lut[b'C' as usize] = 0b001;
+    lut[b'G' as usize] = 0b010;
+    lut[b'N' as usize] = 0b011;
+    lut[b'T' as usize] = 0b100;
     lut
 };
 
-static BITS_LUT: [u8; 4] = {
+/*static BITS_LUT: [u8; 4] = {
     let mut lut = [0u8; 4];
     lut[0b00] = b'A';
     lut[0b10] = b'T';
     lut[0b01] = b'C';
     lut[0b11] = b'G';
     lut
-};
+};*/
 
-pub fn n_to_bits_lut(n: &[u8]) -> Vec<u64> {
-    let mut res = vec![0u64; (n.len() >> 5) + if n.len() & 31 == 0 {0} else {1}];
+pub fn n_to_bits2_lut(n: &[u8]) -> Vec<u64> {
+    let mut res = vec![0u64; (n.len() / 27) + if n.len() % 27 == 0 {0} else {1}];
+    let len = n.len() / 3;
 
     unsafe {
-        for i in 0..n.len() {
-            let offset = i >> 5;
-            let shift = (i & 31) << 1;
-            *res.get_unchecked_mut(offset) = *res.get_unchecked(offset)
-                | ((*BYTE_LUT.get_unchecked(*n.get_unchecked(i) as usize) as u64) << shift);
+        for i in 0..len {
+            let idx = i * 3;
+            let res_offset = i / 9;
+            let res_shift = (i % 9) * 7;
+            let a = *BYTE_LUT.get_unchecked(*n.get_unchecked(idx) as usize);
+            let b = (*BYTE_LUT.get_unchecked(*n.get_unchecked(idx + 1) as usize)) * 5;
+            let c = (*BYTE_LUT.get_unchecked(*n.get_unchecked(idx + 2) as usize)) * 25;
+            let encoding = (a + b + c) as u64;
+            *res.get_unchecked_mut(res_offset) = *res.get_unchecked(res_offset) | (encoding << res_shift);
+        }
+
+        let leftover = n.len() % 3;
+
+        if leftover > 0 {
+            let idx = len * 3;
+            let res_offset = len / 9;
+            let res_shift = (len % 9) * 7;
+            let a = *BYTE_LUT.get_unchecked(*n.get_unchecked(idx) as usize);
+            let b = if leftover >= 2 {(*BYTE_LUT.get_unchecked(*n.get_unchecked(idx + 1) as usize)) * 5} else {0};
+            let encoding = (a + b) as u64;
+            *res.get_unchecked_mut(res_offset) = *res.get_unchecked(res_offset) | (encoding << res_shift);
         }
     }
 
     res
 }
 
-pub fn bits_to_n_lut(bits: &[u64], len: usize) -> Vec<u8> {
+/*pub fn bits_to_n_lut(bits: &[u64], len: usize) -> Vec<u8> {
     if len > (bits.len() << 5) {
         panic!("The length is greater than the number of nucleotides!");
     }
@@ -60,7 +79,7 @@ pub fn bits_to_n_lut(bits: &[u64], len: usize) -> Vec<u8> {
 
         Vec::from_raw_parts(res_ptr, len, len)
     }
-}
+}*/
 
 union AlignedArray {
     v: __m256i,
@@ -69,22 +88,29 @@ union AlignedArray {
 
 pub fn n_to_bits2_pext(n: &[u8]) -> Vec<u64> {
     let mut ptr = n.as_ptr();
-    let end_idx = n.len() >> 5;
-    let len = end_idx + if n.len() & 31 == 0 {0} else {1};
-
-    let pack_right_mask = 0x007F007F007F007Fu64; // 0b...0000000001111111
+    let end_idx = if n.len() < 5 {0} else {(n.len() - 5) / 27};
+    let len = (n.len() / 27) + if n.len() % 27 == 0 {0} else {1};
 
     unsafe {
-        let layout = alloc::Layout::from_size_align_unchecked(len << 5, 8);
+        let layout = alloc::Layout::from_size_align_unchecked(len << 3, 8);
         let res_ptr = alloc::alloc(layout) as *mut u64;
 
-        let lut = _mm256_set1_epi64x(0x0002030401000000);
+        let lut = {
+            let mut lut = 0;
+            lut |= 0b000 << (((b'A' as i64) & 0b111) << 3);
+            lut |= 0b001 << (((b'C' as i64) & 0b111) << 3);
+            lut |= 0b010 << (((b'G' as i64) & 0b111) << 3);
+            lut |= 0b011 << (((b'N' as i64) & 0b111) << 3);
+            lut |= 0b100 << (((b'T' as i64) & 0b111) << 3);
+            _mm256_set1_epi64x(lut)
+        };
         let permute_mask = _mm256_set_epi32(6, 5, 4, 3, 3, 2, 1, 0);
         let shuffle_mask1 = _mm256_set_epi16(-1, -1, -1, -1, 28, 25, 22, 19, -1, -1, -1, 12,  9,  6,  3,  0);
         let shuffle_mask2 = _mm256_set_epi16(-1, -1, -1, -1, 29, 26, 23, 20, -1, -1, -1, 13, 10,  7,  4,  1);
         let shuffle_mask3 = _mm256_set_epi16(-1, -1, -1, -1, 30, 27, 24, 21, -1, -1, -1, 14, 11,  8,  5,  2);
         let mul5 = _mm256_set1_epi16(5);
         let mul25 = _mm256_set1_epi16(25);
+        let pack_right_mask = 0x007F007F007F007Fu64; // 0b...0000000001111111
 
         let mut arr = AlignedArray{v: _mm256_undefined_si256()};
 
@@ -98,8 +124,8 @@ pub fn n_to_bits2_pext(n: &[u8]) -> Vec<u64> {
             let b = _mm256_shuffle_epi8(v, shuffle_mask2);
             let c = _mm256_shuffle_epi8(v, shuffle_mask3);
 
-            let b = _mm256_mullo_epi16(v, mul5);
-            let c = _mm256_mullo_epi16(v, mul25);
+            let b = _mm256_mullo_epi16(b, mul5);
+            let c = _mm256_mullo_epi16(c, mul25);
 
             let ab = _mm256_add_epi16(a, b);
             arr.v = _mm256_add_epi16(ab, c);
@@ -114,15 +140,19 @@ pub fn n_to_bits2_pext(n: &[u8]) -> Vec<u64> {
             ptr = ptr.offset(27);
         }
 
-        if n.len() & 31 > 0 {
-            *res_ptr.offset(end_idx as isize) = *n_to_bits_lut(&n[end_idx..]).get_unchecked(0);
+        if end_idx < len {
+            let end = n_to_bits2_lut(&n[(end_idx * 27)..]);
+
+            for i in 0..end.len() {
+                *res_ptr.offset((end_idx + i) as isize) = *end.get_unchecked(i);
+            }
         }
 
         Vec::from_raw_parts(res_ptr, len, len)
     }
 }
 
-pub fn bits_to_n_shuffle(bits: &[u64], len: usize) -> Vec<u8> {
+/*pub fn bits_to_n_shuffle(bits: &[u64], len: usize) -> Vec<u8> {
     if len > (bits.len() << 5) {
         panic!("The length is greater than the number of nucleotides!");
     }
@@ -195,33 +225,33 @@ pub fn bits_to_n_pdep(bits: &[u64], len: usize) -> Vec<u8> {
 
         Vec::from_raw_parts(ptr as *mut u8, len, bits.len() << 5)
     }
-}
+}*/
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_n_to_bits_lut() {
-        assert_eq!(n_to_bits_lut(b"ATCGATCGATCGATCGATCGATCGATCGATCG"),
-                vec![0b1101100011011000110110001101100011011000110110001101100011011000]);
-        assert_eq!(n_to_bits_lut(b"ATCG"), vec![0b11011000]);
+    fn test_n_to_bits2_lut() {
+        assert_eq!(n_to_bits2_lut(b"ATCGNATCGNATCGNATCGNATCGNATCGNATCGN"),
+                vec![0b110011101110110010001010110110101101100111011101100100010101101, 0b1000101011011010110]);
+        assert_eq!(n_to_bits2_lut(b"ATCGN"), vec![0b100010101101]);
     }
 
-    #[test]
+    /*#[test]
     fn test_bits_to_n_lut() {
         assert_eq!(bits_to_n_lut(&vec![0b1101100011011000110110001101100011011000110110001101100011011000], 32),
                 b"ATCGATCGATCGATCGATCGATCGATCGATCG");
-    }
+    }*/
 
     #[test]
-    fn test_n_to_bits_pext() {
-        assert_eq!(n_to_bits_pext(b"ATCGATCGATCGATCGATCGATCGATCGATCG"),
-                vec![0b1101100011011000110110001101100011011000110110001101100011011000]);
-        assert_eq!(n_to_bits_pext(b"ATCG"), vec![0b11011000]);
+    fn test_n_to_bits2_pext() {
+        assert_eq!(n_to_bits2_pext(b"ATCGNATCGNATCGNATCGNATCGNATCGNATCGN"),
+                vec![0b110011101110110010001010110110101101100111011101100100010101101, 0b1000101011011010110]);
+        assert_eq!(n_to_bits2_pext(b"ATCGN"), vec![0b100010101101]);
     }
 
-    #[test]
+    /*#[test]
     fn test_n_to_bits_mul() {
         assert_eq!(n_to_bits_mul(b"ATCGATCGATCGATCGATCGATCGATCGATCG"),
                 vec![0b1101100011011000110110001101100011011000110110001101100011011000]);
@@ -244,5 +274,5 @@ mod tests {
     fn test_bits_to_n_clmul() {
         assert_eq!(bits_to_n_clmul(&vec![0b1101100011011000110110001101100011011000110110001101100011011000], 32),
                 b"ATCGATCGATCGATCGATCGATCGATCGATCG");
-    }
+    }*/
 }

@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn test_bits_to_n_lut() {
         assert_eq!(bits_to_n_lut(&vec![0b1101100011011000110110001101100011011000110110001101100011011000], 32),
-                b"ATCGATCGATCGATCGATCGATCGATCGATCG");
+                "ATCGATCGATCGATCGATCGATCGATCGATCG".as_bytes());
     }
 
     #[test]
@@ -305,18 +305,18 @@ mod tests {
     #[test]
     fn test_bits_to_n_shuffle() {
         assert_eq!(bits_to_n_shuffle(&vec![0b1101100011011000110110001101100011011000110110001101100011011000], 32),
-                b"ATCGATCGATCGATCGATCGATCGATCGATCG");
+                "ATCGATCGATCGATCGATCGATCGATCGATCG".as_bytes());
     }
 
     #[test]
     fn test_bits_to_n_pdep() {
         assert_eq!(bits_to_n_pdep(&vec![0b1101100011011000110110001101100011011000110110001101100011011000], 32),
-                b"ATCGATCGATCGATCGATCGATCGATCGATCG");
+                "ATCGATCGATCGATCGATCGATCGATCGATCG".as_bytes());
     }
 
     #[test]
     fn test_bits_to_n_clmul() {
         assert_eq!(bits_to_n_clmul(&vec![0b1101100011011000110110001101100011011000110110001101100011011000], 32),
-                b"ATCGATCGATCGATCGATCGATCGATCGATCG");
+                "ATCGATCGATCGATCGATCGATCGATCGATCG".as_bytes());
     }
 }

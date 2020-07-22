@@ -46,7 +46,20 @@ fn bench_bits_to_n(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_n_to_bits, bench_bits_to_n, bench_n_to_bits2);
+fn bench_bits_to_n2(c: &mut Criterion) {
+    let bits = black_box(get_bits_undetermined(8000));
+    let len = black_box(5 * 8000);
+
+    let mut group = c.benchmark_group("bits_to_n2");
+
+    group.bench_function("bits_to_n2_lut", |b| b.iter(|| bits_to_n2_lut(&bits, len)));
+    group.bench_function("bits_to_n2_pdep", |b| b.iter(|| bits_to_n2_pdep(&bits, len)));
+    group.bench_function("memcpy", |b| b.iter(|| unsafe {let mut dest = vec![0u64; bits.len()]; ptr::copy_nonoverlapping(bits.as_ptr(), dest.as_mut_ptr(), bits.len()); dest}));
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_n_to_bits, bench_bits_to_n, bench_n_to_bits2, bench_bits_to_n2);
 criterion_main!(benches);
 
 fn get_nucleotides(repeat: usize) -> Vec<u8> {
@@ -58,13 +71,9 @@ fn get_nucleotides_undetermined(repeat: usize) -> Vec<u8> {
 }
 
 fn get_bits(repeat: usize) -> Vec<u64> {
-    let bits = 0b11011000u64;
+    n_to_bits_lut(&(b"ATCG".repeat(repeat)))
+}
 
-    let mut curr = 0u64;
-
-    for i in 0..8 {
-        curr |= bits << (i << 3);
-    }
-
-    vec![curr].repeat((repeat >> 3) + if repeat & 7 == 0 {0} else {1})
+fn get_bits_undetermined(repeat: usize) -> Vec<u64> {
+    n_to_bits2_lut(&(b"ATCGN".repeat(repeat)))
 }

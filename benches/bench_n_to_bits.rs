@@ -13,6 +13,8 @@ fn bench_n_to_bits(c: &mut Criterion) {
 
     group.bench_function("n_to_bits_lut", |b| b.iter(|| n_to_bits_lut(&n)));
     group.bench_function("n_to_bits_pext", |b| b.iter(|| n_to_bits_pext(&n)));
+    group.bench_function("n_to_bits_shift", |b| b.iter(|| n_to_bits_shift(&n)));
+    group.bench_function("n_to_bits_movemask", |b| b.iter(|| n_to_bits_movemask(&n)));
     group.bench_function("n_to_bits_mul", |b| b.iter(|| n_to_bits_mul(&n)));
     group.bench_function("memcpy", |b| b.iter(|| unsafe {let mut dest = vec![0u8; n.len()]; ptr::copy_nonoverlapping(n.as_ptr(), dest.as_mut_ptr(), n.len()); dest}));
 

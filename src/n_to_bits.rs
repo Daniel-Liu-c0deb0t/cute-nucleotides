@@ -104,6 +104,81 @@ pub fn n_to_bits_pext(n: &[u8]) -> Vec<u64> {
     }
 }
 
+pub fn n_to_bits_shift(n: &[u8]) -> Vec<u64> {
+    let ptr = n.as_ptr() as *const __m256i;
+    let end_idx = n.len() >> 5;
+    let len = end_idx + if n.len() & 31 == 0 {0} else {1};
+
+    unsafe {
+        let layout = alloc::Layout::from_size_align_unchecked(len << 3, 8);
+        let res_ptr = alloc::alloc(layout) as *mut u64;
+
+        let ascii_mask = _mm256_set1_epi8(0b00000110);
+        let shuffle_mask = _mm256_set_epi32(-1, -1, -1, 0x0C080400, -1, -1, -1, 0x0C080400);
+
+        let mut arr = [AlignedArray{v: _mm256_undefined_si256()}, AlignedArray{v: _mm256_undefined_si256()}];
+
+        for i in 0..end_idx as isize {
+            let v = _mm256_loadu_si256(ptr.offset(i));
+            // mask out unimportant bits
+            let v = _mm256_and_si256(v, ascii_mask);
+            // shift each group of 2 bits for each nucleotide to the start of each byte
+            let a = _mm256_srli_epi16(v, 1);
+            // combine adjacent pairs of bytes
+            let b = _mm256_srli_epi16(v, 8 - 2 + 1);
+            let a = _mm256_or_si256(a, b);
+            // combine adjacent pairs of 16 bit chunks
+            let b = _mm256_srli_epi32(a, 16 - 4);
+            let v = _mm256_or_si256(a, b);
+            let arr_idx = (i as usize) & 1;
+            // extract first 8 bits of every 32 bit integer
+            (*arr.get_unchecked_mut(arr_idx)).v = _mm256_shuffle_epi8(v, shuffle_mask);
+            // combine first 32 bits from both lanes
+            *res_ptr.offset(i) = (*arr.get_unchecked(arr_idx)).a[0] | ((*arr.get_unchecked(arr_idx)).a[2] << 32);
+        }
+
+        if n.len() & 31 > 0 {
+            *res_ptr.offset(end_idx as isize) = *n_to_bits_lut(&n[(end_idx << 5)..]).get_unchecked(0);
+        }
+
+        Vec::from_raw_parts(res_ptr, len, len)
+    }
+}
+
+pub fn n_to_bits_movemask(n: &[u8]) -> Vec<u64> {
+    let ptr = n.as_ptr() as *const __m256i;
+    let end_idx = n.len() >> 5;
+    let len = end_idx + if n.len() & 31 == 0 {0} else {1};
+
+    let lo_mask = 0x5555555555555555u64;
+    let hi_mask = 0xAAAAAAAAAAAAAAAAu64;
+
+    unsafe {
+        let layout = alloc::Layout::from_size_align_unchecked(len << 3, 8);
+        let res_ptr = alloc::alloc(layout) as *mut u64;
+
+        for i in 0..end_idx as isize {
+            let v = _mm256_loadu_si256(ptr.offset(i));
+            // shift the two important bits that represent each nucleotide to the end of each byte
+            let v1 = _mm256_slli_epi16(v, 6);
+            let v2 = _mm256_slli_epi16(v, 5);
+            // get first two bits of each byte as two separate integers
+            let a = _mm256_movemask_epi8(v1) as u64;
+            let b = _mm256_movemask_epi8(v2) as u64;
+            // interleave 32 bit integers to get a pair of bits for each nucleotide
+            let a = _pdep_u64(a, lo_mask);
+            let b = _pdep_u64(b, hi_mask);
+            *res_ptr.offset(i) = a | b;
+        }
+
+        if n.len() & 31 > 0 {
+            *res_ptr.offset(end_idx as isize) = *n_to_bits_lut(&n[(end_idx << 5)..]).get_unchecked(0);
+        }
+
+        Vec::from_raw_parts(res_ptr, len, len)
+    }
+}
+
 pub fn n_to_bits_mul(n: &[u8]) -> Vec<u64> {
     let ptr = n.as_ptr() as *const __m256i;
     let end_idx = n.len() >> 5;
@@ -293,6 +368,20 @@ mod tests {
         assert_eq!(n_to_bits_pext(b"ATCGATCGATCGATCGATCGATCGATCGATCG"),
                 vec![0b1101100011011000110110001101100011011000110110001101100011011000]);
         assert_eq!(n_to_bits_pext(b"ATCG"), vec![0b11011000]);
+    }
+
+    #[test]
+    fn test_n_to_bits_shift() {
+        assert_eq!(n_to_bits_shift(b"ATCGATCGATCGATCGATCGATCGATCGATCG"),
+                vec![0b1101100011011000110110001101100011011000110110001101100011011000]);
+        assert_eq!(n_to_bits_shift(b"ATCG"), vec![0b11011000]);
+    }
+
+    #[test]
+    fn test_n_to_bits_movemask() {
+        assert_eq!(n_to_bits_movemask(b"ATCGATCGATCGATCGATCGATCGATCGATCG"),
+                vec![0b1101100011011000110110001101100011011000110110001101100011011000]);
+        assert_eq!(n_to_bits_movemask(b"ATCG"), vec![0b11011000]);
     }
 
     #[test]

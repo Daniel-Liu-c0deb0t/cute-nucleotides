@@ -27,6 +27,8 @@ static BITS_LUT: [u8; 4] = {
     lut
 };
 
+/// Encode `{A, T, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
+/// by using a naive scalar method.
 pub fn n_to_bits_lut(n: &[u8]) -> Vec<u64> {
     let mut res = vec![0u64; (n.len() >> 5) + if n.len() & 31 == 0 {0} else {1}];
 
@@ -42,6 +44,8 @@ pub fn n_to_bits_lut(n: &[u8]) -> Vec<u64> {
     res
 }
 
+/// Decode pairs of bits from packed 64-bit integers to get a byte string of `{A, T, C, G}`, by using a naive scalar
+/// method.
 pub fn bits_to_n_lut(bits: &[u64], len: usize) -> Vec<u8> {
     if len > (bits.len() << 5) {
         panic!("The length is greater than the number of nucleotides!");
@@ -67,6 +71,10 @@ union AlignedArray {
     a: [u64; 4]
 }
 
+/// Encode `{A, T, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
+/// by using a vectorized method with the `pext` instruction.
+///
+/// Requires AVX2 and BMI2 support.
 pub fn n_to_bits_pext(n: &[u8]) -> Vec<u64> {
     let ptr = n.as_ptr() as *const __m256i;
     let end_idx = n.len() >> 5;
@@ -82,17 +90,17 @@ pub fn n_to_bits_pext(n: &[u8]) -> Vec<u64> {
 
         for i in 0..end_idx as isize {
             let arr_idx = (i as usize) & 1;
-            // fast conversion of unaligned data to aligned
+            // convert unaligned data to aligned
             (*arr.get_unchecked_mut(arr_idx)).v = _mm256_loadu_si256(ptr.offset(i));
 
-            // ascii_mask uses a special property of ATCG ASCII characters in binary
-            // hide latency
+            // the second and third bits of each byte uniquely identifies each nucleotide
+            // extract those two bits for each character
             let a = _pext_u64((*arr.get_unchecked(arr_idx)).a[0], ascii_mask);
             let b = _pext_u64((*arr.get_unchecked(arr_idx)).a[1], ascii_mask);
             let c = _pext_u64((*arr.get_unchecked(arr_idx)).a[2], ascii_mask);
             let d = _pext_u64((*arr.get_unchecked(arr_idx)).a[3], ascii_mask);
 
-            // combine low 16 bits in each 64 bit chunk
+            // combine low 16 bits in each 64-bit chunk
             *res_ptr.offset(i) = a | (b << 16) | (c << 32) | (d << 48);
         }
 
@@ -104,6 +112,10 @@ pub fn n_to_bits_pext(n: &[u8]) -> Vec<u64> {
     }
 }
 
+/// Encode `{A, T, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
+/// by using a vectorized method with the `srli` (bit shift) instruction and merging.
+///
+/// Requires AVX2 support.
 pub fn n_to_bits_shift(n: &[u8]) -> Vec<u64> {
     let ptr = n.as_ptr() as *const __m256i;
     let end_idx = n.len() >> 5;
@@ -120,20 +132,26 @@ pub fn n_to_bits_shift(n: &[u8]) -> Vec<u64> {
 
         for i in 0..end_idx as isize {
             let v = _mm256_loadu_si256(ptr.offset(i));
+
             // mask out unimportant bits
             let v = _mm256_and_si256(v, ascii_mask);
+
             // shift each group of 2 bits for each nucleotide to the start of each byte
             let a = _mm256_srli_epi16(v, 1);
+
             // combine adjacent pairs of bytes
             let b = _mm256_srli_epi16(v, 8 - 2 + 1);
             let a = _mm256_or_si256(a, b);
-            // combine adjacent pairs of 16 bit chunks
+
+            // combine adjacent pairs of 16-bit chunks
             let b = _mm256_srli_epi32(a, 16 - 4);
             let v = _mm256_or_si256(a, b);
+
+            // extract first 8 bits of every 32-bit integer
             let arr_idx = (i as usize) & 1;
-            // extract first 8 bits of every 32 bit integer
             (*arr.get_unchecked_mut(arr_idx)).v = _mm256_shuffle_epi8(v, shuffle_mask);
-            // combine first 32 bits from both lanes
+
+            // combine first 32-bits from both lanes
             *res_ptr.offset(i) = (*arr.get_unchecked(arr_idx)).a[0] | ((*arr.get_unchecked(arr_idx)).a[2] << 32);
         }
 
@@ -145,6 +163,10 @@ pub fn n_to_bits_shift(n: &[u8]) -> Vec<u64> {
     }
 }
 
+/// Encode `{A, T, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
+/// by using a vectorized method with the `movemask` instruction and interleaving bits using the `pdep` instruction.
+///
+/// Requires AVX2 and BMI2 support.
 pub fn n_to_bits_movemask(n: &[u8]) -> Vec<u64> {
     let ptr = n.as_ptr() as *const __m256i;
     let end_idx = n.len() >> 5;
@@ -159,13 +181,16 @@ pub fn n_to_bits_movemask(n: &[u8]) -> Vec<u64> {
 
         for i in 0..end_idx as isize {
             let v = _mm256_loadu_si256(ptr.offset(i));
+
             // shift the two important bits that represent each nucleotide to the end of each byte
             let v1 = _mm256_slli_epi16(v, 6);
             let v2 = _mm256_slli_epi16(v, 5);
+
             // get first two bits of each byte as two separate integers
             let a = _mm256_movemask_epi8(v1) as u64;
             let b = _mm256_movemask_epi8(v2) as u64;
-            // interleave 32 bit integers to get a pair of bits for each nucleotide
+
+            // interleave 32-bit integers to get a pair of bits for each nucleotide
             let a = _pdep_u64(a, lo_mask);
             let b = _pdep_u64(b, hi_mask);
             *res_ptr.offset(i) = a | b;
@@ -179,6 +204,10 @@ pub fn n_to_bits_movemask(n: &[u8]) -> Vec<u64> {
     }
 }
 
+/// Encode `{A, T, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
+/// by using a vectorized method with multiplication by a special mask to shift bits.
+///
+/// Requires AVX2 support.
 pub fn n_to_bits_mul(n: &[u8]) -> Vec<u64> {
     let ptr = n.as_ptr() as *const __m256i;
     let end_idx = n.len() >> 5;
@@ -204,13 +233,17 @@ pub fn n_to_bits_mul(n: &[u8]) -> Vec<u64> {
 
         for i in 0..end_idx as isize {
             let v = _mm256_loadu_si256(ptr.offset(i));
+
             // mask out unimportant bits
             let v = _mm256_and_si256(v, ascii_mask);
+
             // multiply to pack left exactly 4 nucleotides (8 bits)
             let v = _mm256_mullo_epi32(v, mul_mask);
+
+            // extract last 8 bits of every 32-bit integer
             let arr_idx = (i as usize) & 1;
-            // extract last 8 bits of every 32 bit integer
             (*arr.get_unchecked_mut(arr_idx)).v = _mm256_shuffle_epi8(v, shuffle_mask);
+
             // combine first 32 bits from both lanes
             *res_ptr.offset(i) = (*arr.get_unchecked(arr_idx)).a[0] | ((*arr.get_unchecked(arr_idx)).a[2] << 32);
         }
@@ -223,6 +256,10 @@ pub fn n_to_bits_mul(n: &[u8]) -> Vec<u64> {
     }
 }
 
+/// Decode pairs of bits from packed 64-bit integers to get a byte string of `{A, T, C, G}`, by using a vectorized
+/// method with the `srli` (bit shift) instruction and a lookup table with the `shuffle` instruction.
+///
+/// Requires AVX2 support.
 pub fn bits_to_n_shuffle(bits: &[u64], len: usize) -> Vec<u8> {
     if len > (bits.len() << 5) {
         panic!("The length is greater than the number of nucleotides!");
@@ -240,15 +277,20 @@ pub fn bits_to_n_shuffle(bits: &[u64], len: usize) -> Vec<u8> {
         for i in 0..bits.len() {
             let curr = *bits.get_unchecked(i) as i64;
             let v = _mm256_set1_epi64x(curr);
+
             // duplicate each byte four times
             let v1 = _mm256_shuffle_epi8(v, shuffle_mask);
+
             // separately right shift each 16-bit chunk by 0 or 4 bits
             let v2 = _mm256_srli_epi16(v1, 4);
+
             // merge together shifted chunks
             let v = _mm256_blend_epi16(v1, v2, 0b10101010i32);
+
             // only keep two bits in each byte
             // either 0b0011 or 0b1100
             let v = _mm256_and_si256(v, lo_mask);
+
             // use lookup table to convert nucleotide bits to bytes
             let v = _mm256_shuffle_epi8(lut, v);
             _mm256_store_si256(ptr.offset(i as isize), v);
@@ -258,6 +300,10 @@ pub fn bits_to_n_shuffle(bits: &[u64], len: usize) -> Vec<u8> {
     }
 }
 
+/// Decode pairs of bits from packed 64-bit integers to get a byte string of `{A, T, C, G}`, by using a vectorized
+/// method with the `pdep` instruction and a lookup table with the `shuffle` instruction.
+///
+/// Requires AVX2 and BMI2 support.
 pub fn bits_to_n_pdep(bits: &[u64], len: usize) -> Vec<u8> {
     if len > (bits.len() << 5) {
         panic!("The length is greater than the number of nucleotides!");
@@ -274,12 +320,14 @@ pub fn bits_to_n_pdep(bits: &[u64], len: usize) -> Vec<u8> {
 
         for i in 0..bits.len() {
             let curr = *bits.get_unchecked(i);
+
             // spread out nucleotide bits to first 2 bits of each byte
             let a = _pdep_u64(curr, scatter_mask) as i64;
             let b = _pdep_u64(curr >> 16, scatter_mask) as i64;
             let c = _pdep_u64(curr >> 32, scatter_mask) as i64;
             let d = _pdep_u64(curr >> 48, scatter_mask) as i64;
             let v = _mm256_set_epi64x(d, c, b, a);
+
             // lookup table from nucleotide bits to bytes
             let v = _mm256_shuffle_epi8(lut, v);
             _mm256_store_si256(ptr.offset(i as isize), v);
@@ -289,6 +337,10 @@ pub fn bits_to_n_pdep(bits: &[u64], len: usize) -> Vec<u8> {
     }
 }
 
+/// Decode pairs of bits from packed 64-bit integers to get a byte string of `{A, T, C, G}`, by using a vectorized
+/// method with the `clmul` (carry-less multiplication) instruction.
+///
+/// Requires SSSE3 and PCLMULQDQ support.
 pub fn bits_to_n_clmul(bits: &[u64], len: usize) -> Vec<u8> {
     if len > (bits.len() << 5) {
         panic!("The length is greater than the number of nucleotides!");
@@ -316,23 +368,28 @@ pub fn bits_to_n_clmul(bits: &[u64], len: usize) -> Vec<u8> {
         for i in 0..bits.len() {
             let curr = *bits.get_unchecked(i) as i64;
             let v = _mm_set1_epi64x(curr);
-            // spread out bytes to the low 8 bits of each 32 bit chunk
+
+            // spread out bytes to the low 8 bits of each 32-bit chunk
             let lo_v = _mm_shuffle_epi8(v, lo_shuffle_mask);
             let hi_v = _mm_shuffle_epi8(v, hi_shuffle_mask);
+
             // multiply by mask to shift to correct positions
             // carry-less multiply will ensure that separate bytes do not interfere with each other
-            // handle 64 bit chunks separately
+            // handle 64-bit chunks separately
             let lo_v1 = _mm_clmulepi64_si128(lo_v, mul_mask, 0x00);
             let lo_v2 = _mm_clmulepi64_si128(lo_v, mul_mask, 0x0F);
             let hi_v1 = _mm_clmulepi64_si128(hi_v, mul_mask, 0x00);
             let hi_v2 = _mm_clmulepi64_si128(hi_v, mul_mask, 0x0F);
-            // combine the two low chunks of 64 bits into 128 bit vectors
+
+            // combine the two low 64-bit chunks into 128-bit vectors
             // casts are free
             let lo_v = _mm_castps_si128(_mm_movelh_ps(_mm_castsi128_ps(lo_v1), _mm_castsi128_ps(lo_v2)));
             let hi_v = _mm_castps_si128(_mm_movelh_ps(_mm_castsi128_ps(hi_v1), _mm_castsi128_ps(hi_v2)));
+
             // only keep low bits
             let lo_v = _mm_and_si128(lo_v, lo_mask);
             let hi_v = _mm_and_si128(hi_v, lo_mask);
+
             // use lookup table to convert nucleotide bits to bytes
             let lo_v = _mm_shuffle_epi8(lut, lo_v);
             let hi_v = _mm_shuffle_epi8(lut, hi_v);

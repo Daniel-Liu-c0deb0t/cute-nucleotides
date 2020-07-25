@@ -28,7 +28,6 @@ fn bench_n_to_bits2(c: &mut Criterion) {
 
     group.bench_function("n_to_bits2_lut", |b| b.iter(|| n_to_bits2_lut(&n)));
     group.bench_function("n_to_bits2_pext", |b| b.iter(|| n_to_bits2_pext(&n)));
-    group.bench_function("memcpy", |b| b.iter(|| unsafe {let mut dest = vec![0u8; n.len()]; ptr::copy_nonoverlapping(n.as_ptr(), dest.as_mut_ptr(), n.len()); dest}));
 
     group.finish();
 }
@@ -43,7 +42,6 @@ fn bench_bits_to_n(c: &mut Criterion) {
     group.bench_function("bits_to_n_shuffle", |b| b.iter(|| bits_to_n_shuffle(&bits, len)));
     group.bench_function("bits_to_n_pdep", |b| b.iter(|| bits_to_n_pdep(&bits, len)));
     group.bench_function("bits_to_n_clmul", |b| b.iter(|| bits_to_n_clmul(&bits, len)));
-    group.bench_function("memcpy", |b| b.iter(|| unsafe {let mut dest = vec![0u64; bits.len()]; ptr::copy_nonoverlapping(bits.as_ptr(), dest.as_mut_ptr(), bits.len()); dest}));
 
     group.finish();
 }
@@ -56,7 +54,6 @@ fn bench_bits_to_n2(c: &mut Criterion) {
 
     group.bench_function("bits_to_n2_lut", |b| b.iter(|| bits_to_n2_lut(&bits, len)));
     group.bench_function("bits_to_n2_pdep", |b| b.iter(|| bits_to_n2_pdep(&bits, len)));
-    group.bench_function("memcpy", |b| b.iter(|| unsafe {let mut dest = vec![0u64; bits.len()]; ptr::copy_nonoverlapping(bits.as_ptr(), dest.as_mut_ptr(), bits.len()); dest}));
 
     group.finish();
 }

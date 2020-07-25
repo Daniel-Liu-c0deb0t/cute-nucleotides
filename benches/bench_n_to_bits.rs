@@ -10,6 +10,7 @@ fn bench_n_to_bits(c: &mut Criterion) {
     let n = black_box(get_nucleotides(10000));
 
     let mut group = c.benchmark_group("n_to_bits");
+    group.throughput(Throughput::Bytes(40000));
 
     group.bench_function("n_to_bits_lut", |b| b.iter(|| n_to_bits_lut(&n)));
     group.bench_function("n_to_bits_pext", |b| b.iter(|| n_to_bits_pext(&n)));
@@ -25,6 +26,7 @@ fn bench_n_to_bits2(c: &mut Criterion) {
     let n = black_box(get_nucleotides_undetermined(8000));
 
     let mut group = c.benchmark_group("n_to_bits2");
+    group.throughput(Throughput::Bytes(40000));
 
     group.bench_function("n_to_bits2_lut", |b| b.iter(|| n_to_bits2_lut(&n)));
     group.bench_function("n_to_bits2_pext", |b| b.iter(|| n_to_bits2_pext(&n)));
@@ -37,6 +39,7 @@ fn bench_bits_to_n(c: &mut Criterion) {
     let len = black_box(4 * 10000);
 
     let mut group = c.benchmark_group("bits_to_n");
+    group.throughput(Throughput::Bytes(40000));
 
     group.bench_function("bits_to_n_lut", |b| b.iter(|| bits_to_n_lut(&bits, len)));
     group.bench_function("bits_to_n_shuffle", |b| b.iter(|| bits_to_n_shuffle(&bits, len)));
@@ -51,6 +54,7 @@ fn bench_bits_to_n2(c: &mut Criterion) {
     let len = black_box(5 * 8000);
 
     let mut group = c.benchmark_group("bits_to_n2");
+    group.throughput(Throughput::Bytes(40000));
 
     group.bench_function("bits_to_n2_lut", |b| b.iter(|| bits_to_n2_lut(&bits, len)));
     group.bench_function("bits_to_n2_pdep", |b| b.iter(|| bits_to_n2_pdep(&bits, len)));

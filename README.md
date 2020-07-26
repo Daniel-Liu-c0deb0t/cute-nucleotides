@@ -1,14 +1,13 @@
-# rust-fast
-A collection of cute tests and benchmarks in Rust for various tasks.
+# cute-nucleotides
+Cute tricks for efficiently encoding and decoding nucleotides.
 
-These programs should be run on x86 CPUs that support AVX2 and BMI2 instructions (so modern Intel and AMD CPUs).
+This should be run on x86 CPUs that support AVX2 and BMI2 instructions (so modern Intel and AMD CPUs).
 Many functions are not written in a cross-platform way, since I'm too lazy to do so for mere test programs.
 
 **Warning: there is a lot of unsafe code! Your eyes may trick you into thinking that the code is written
 in C. No, it is (unfortunately) 100% organic Rust. Read it at your own risk.**
 
-## Experiment 1: Cute speedups for converting nucleotides to bits
-### Motivation
+## Motivation
 It turns out that when dealing with millions and billions of sequenced DNA/RNA data, a large amount
 of memory space is necessary (gasp!). Therefore, it is important to compress the DNA nucleotides
 `{A, T, C, G}` or RNA nucleotides `{A, U, C, G}` to save precious space. There are general-purpose
@@ -32,7 +31,7 @@ These benefits make this encoding technique very commonly used. The natural ques
 encoding and decoding be done if we squeeze every last cycle out of a CPU? Spoiler: we can go faster
 than `memcpy` (`std::ptr::copy_nonoverlapping` in Rust).
 
-### Nucleotides to bits conversion
+## Nucleotides to bits conversion
 The goal here is fast, case-insensitive conversion of a string of nucleotides to pairs of bits:
 `{A, T/U, C, G} -> {00, 10, 01, 11}`. We do not have to validate the data for whether other characters are
 present, and we can avoid all branches in the hot loops.
@@ -71,7 +70,7 @@ one per cycle on modern CPUs, so they are quite fast.
 
 * **n_to_bits_mul (AVX2)**. Surprisingly, multiplication can be used as a fast bit-level shuffle operation.
 Crazy, right? Here's an example, where we want to create the binary number `ab00ab` from just `0000ab` (`a` and
-`b` are any two bits`) by simply multiplying the magic binary number `010001`:
+`b` are any two bits) by simply multiplying the magic binary number `010001`:
 ```
 ab00ab = 0000ab * 010001
 
@@ -90,20 +89,20 @@ shuffle, and it can be used to pack four pairs of bits into a single byte with j
 provides a way for eight multiplications to happen simultaneously! Compared to the other methods, this method can be
 easily implemented without vector instructions, on just 32-bit words, and it does not require BMI2 support.
 
+## Bits to nucleotides conversion
+
+
+## Cuter algorithms for converting undetermined nucleotides to bits
+### More motivation
+
+
+### Nucleotides to bits conversion
+
+
 ### Bits to nucleotides conversion
 
 
-### Cuter algorithms for converting undetermined nucleotides to bits
-#### More motivation
-
-
-#### Nucleotides to bits conversion
-
-
-#### Bits to nucleotides conversion
-
-
-### Cute speedups in cute micro-benchmarks
+## Cute speedups in cute micro-benchmarks
 All benchmarks were ran on a Intel Core i9-9880H (Coffee Lake-H) CPU with a clock rate of 2.3 Ghz. Run times were measured on byte strings with
 40,000 nucleotides. For shorter strings, the speedup of vectorized methods should be less noticeable due to overhead.
 Recall that the lookup table (`lut`) methods are the naive, scalar algorithms.
@@ -145,5 +144,3 @@ vectors.
 
 For encoding and decoding undetermined nucleotides, the vectorized algorithms provide clear speedups over the lookup-table-based
 naive methods.
-
-## Experiment 2: ???

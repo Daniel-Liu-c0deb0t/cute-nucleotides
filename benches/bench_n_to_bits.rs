@@ -1,7 +1,7 @@
 use std::ptr;
 use criterion::*;
-use rust_fast::n_to_bits::*;
-use rust_fast::n_to_bits2::*;
+use cute_nucleotides::n_to_bits::*;
+use cute_nucleotides::n_to_bits2::*;
 
 // Note: memory allocation takes a nontrivial amount of time!
 // For fair comparison, all functions must allocate memory for its output data.

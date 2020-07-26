@@ -9,10 +9,12 @@ static BYTE_LUT: [u8; 128] = {
     let mut lut = [0u8; 128];
     lut[b'a' as usize] = 0b00;
     lut[b't' as usize] = 0b10;
+    lut[b'u' as usize] = 0b10;
     lut[b'c' as usize] = 0b01;
     lut[b'g' as usize] = 0b11;
     lut[b'A' as usize] = 0b00;
     lut[b'T' as usize] = 0b10;
+    lut[b'U' as usize] = 0b10;
     lut[b'C' as usize] = 0b01;
     lut[b'G' as usize] = 0b11;
     lut
@@ -27,7 +29,7 @@ static BITS_LUT: [u8; 4] = {
     lut
 };
 
-/// Encode `{A, T, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
+/// Encode `{A, T/U, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
 /// by using a naive scalar method.
 pub fn n_to_bits_lut(n: &[u8]) -> Vec<u64> {
     let mut res = vec![0u64; (n.len() >> 5) + if n.len() & 31 == 0 {0} else {1}];
@@ -44,7 +46,7 @@ pub fn n_to_bits_lut(n: &[u8]) -> Vec<u64> {
     res
 }
 
-/// Decode pairs of bits from packed 64-bit integers to get a byte string of `{A, T, C, G}`, by using a naive scalar
+/// Decode pairs of bits from packed 64-bit integers to get a byte string of `{A, T/U, C, G}`, by using a naive scalar
 /// method.
 pub fn bits_to_n_lut(bits: &[u64], len: usize) -> Vec<u8> {
     if len > (bits.len() << 5) {
@@ -71,7 +73,7 @@ union AlignedArray {
     a: [u64; 4]
 }
 
-/// Encode `{A, T, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
+/// Encode `{A, T/U, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
 /// by using a vectorized method with the `pext` instruction.
 ///
 /// Requires AVX2 and BMI2 support.
@@ -112,7 +114,7 @@ pub fn n_to_bits_pext(n: &[u8]) -> Vec<u64> {
     }
 }
 
-/// Encode `{A, T, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
+/// Encode `{A, T/U, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
 /// by using a vectorized method with the `srli` (bit shift) instruction and merging.
 ///
 /// Requires AVX2 support.
@@ -163,7 +165,7 @@ pub fn n_to_bits_shift(n: &[u8]) -> Vec<u64> {
     }
 }
 
-/// Encode `{A, T, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
+/// Encode `{A, T/U, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
 /// by using a vectorized method with the `movemask` instruction and interleaving bits using the `pdep` instruction.
 ///
 /// Requires AVX2 and BMI2 support.
@@ -204,7 +206,7 @@ pub fn n_to_bits_movemask(n: &[u8]) -> Vec<u64> {
     }
 }
 
-/// Encode `{A, T, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
+/// Encode `{A, T/U, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
 /// by using a vectorized method with multiplication by a special mask to shift bits.
 ///
 /// Requires AVX2 support.
@@ -256,7 +258,7 @@ pub fn n_to_bits_mul(n: &[u8]) -> Vec<u64> {
     }
 }
 
-/// Decode pairs of bits from packed 64-bit integers to get a byte string of `{A, T, C, G}`, by using a vectorized
+/// Decode pairs of bits from packed 64-bit integers to get a byte string of `{A, T/U, C, G}`, by using a vectorized
 /// method with the `srli` (bit shift) instruction and a lookup table with the `shuffle` instruction.
 ///
 /// Requires AVX2 support.
@@ -300,7 +302,7 @@ pub fn bits_to_n_shuffle(bits: &[u64], len: usize) -> Vec<u8> {
     }
 }
 
-/// Decode pairs of bits from packed 64-bit integers to get a byte string of `{A, T, C, G}`, by using a vectorized
+/// Decode pairs of bits from packed 64-bit integers to get a byte string of `{A, T/U, C, G}`, by using a vectorized
 /// method with the `pdep` instruction and a lookup table with the `shuffle` instruction.
 ///
 /// Requires AVX2 and BMI2 support.
@@ -337,7 +339,7 @@ pub fn bits_to_n_pdep(bits: &[u64], len: usize) -> Vec<u8> {
     }
 }
 
-/// Decode pairs of bits from packed 64-bit integers to get a byte string of `{A, T, C, G}`, by using a vectorized
+/// Decode pairs of bits from packed 64-bit integers to get a byte string of `{A, T/U, C, G}`, by using a vectorized
 /// method with the `clmul` (carry-less multiplication) instruction.
 ///
 /// Requires SSSE3 and PCLMULQDQ support.
@@ -401,7 +403,7 @@ pub fn bits_to_n_clmul(bits: &[u64], len: usize) -> Vec<u8> {
     }
 }
 
-// A = 00, T = 10, C = 01, G = 11
+// A = 00, T/U = 10, C = 01, G = 11
 
 #[cfg(test)]
 mod tests {

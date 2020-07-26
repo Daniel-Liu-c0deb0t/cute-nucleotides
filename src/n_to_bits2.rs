@@ -10,11 +10,13 @@ static BYTE_LUT: [u8; 128] = {
     lut[b'a' as usize] = 0b000;
     lut[b'c' as usize] = 0b001;
     lut[b't' as usize] = 0b010;
+    lut[b'u' as usize] = 0b010;
     lut[b'g' as usize] = 0b011;
     lut[b'n' as usize] = 0b100;
     lut[b'A' as usize] = 0b000;
     lut[b'C' as usize] = 0b001;
     lut[b'T' as usize] = 0b010;
+    lut[b'U' as usize] = 0b010;
     lut[b'G' as usize] = 0b011;
     lut[b'N' as usize] = 0b100;
     lut
@@ -30,7 +32,7 @@ static BITS_LUT: [u8; 5] = {
     lut
 };
 
-/// Encode each triplet of `{A, T, C, G, N}` from the byte string into 7 bits, then pack every 9 triplets into
+/// Encode each triplet of `{A, T/U, C, G, N}` from the byte string into 7 bits, then pack every 9 triplets into
 /// a single 64-bit integer, by using a naive scalar method.
 pub fn n_to_bits2_lut(n: &[u8]) -> Vec<u64> {
     let mut res = vec![0u64; (n.len() / 27) + if n.len() % 27 == 0 {0} else {1}];
@@ -71,7 +73,7 @@ pub fn n_to_bits2_lut(n: &[u8]) -> Vec<u64> {
     res
 }
 
-/// Decode the 9 triplets of `{A, T, C, G, N}` that are packed into every 64-bit integer into a byte string,
+/// Decode the 9 triplets of `{A, T/U, C, G, N}` that are packed into every 64-bit integer into a byte string,
 /// by using a naive scalar method.
 pub fn bits_to_n2_lut(bits: &[u64], len: usize) -> Vec<u8> {
     if len > (bits.len() * 27) {
@@ -109,7 +111,7 @@ union AlignedArray {
     a: [u64; 4]
 }
 
-/// Encode each triplet of `{A, T, C, G, N}` from the byte string into 7 bits, then pack every 9 triplets into
+/// Encode each triplet of `{A, T/U, C, G, N}` from the byte string into 7 bits, then pack every 9 triplets into
 /// a single 64-bit integer, by using a vectorized method with the `shuffle`, `maddubs`, and `pext` instructions.
 ///
 /// Requires AVX2 and BMI2 support.
@@ -127,6 +129,7 @@ pub fn n_to_bits2_pext(n: &[u8]) -> Vec<u64> {
             lut |= 0b000 << (((b'A' as i64) & 0b111) << 3);
             lut |= 0b001 << (((b'C' as i64) & 0b111) << 3);
             lut |= 0b010 << (((b'T' as i64) & 0b111) << 3);
+            lut |= 0b010 << (((b'U' as i64) & 0b111) << 3);
             lut |= 0b011 << (((b'G' as i64) & 0b111) << 3);
             lut |= 0b100 << (((b'N' as i64) & 0b111) << 3);
             _mm256_set1_epi64x(lut)
@@ -185,7 +188,7 @@ pub fn n_to_bits2_pext(n: &[u8]) -> Vec<u64> {
     }
 }
 
-/// Decode the 9 triplets of `{A, T, C, G, N}` that are packed into every 64-bit integer into a byte string,
+/// Decode the 9 triplets of `{A, T/U, C, G, N}` that are packed into every 64-bit integer into a byte string,
 /// by using a vectorized method with fast modulo/division through multiplication and the `shuffle` and `pdep`
 /// instructions.
 ///
@@ -206,12 +209,9 @@ pub fn bits_to_n2_pdep(bits: &[u64], len: usize) -> Vec<u8> {
         let mul5 = _mm256_set1_epi16(5);
         let div5 = _mm256_set1_epi16(((1u32 << 16) / 5 + 1) as i16);
         let div25 = _mm256_set1_epi16(((1u32 << 16) / 25 + 1) as i16);
-        let a_shuffle_mask = _mm256_set_epi64x(0xFFFFFF08FFFF06FFu64 as i64, 0xFF04FFFF02FFFF00u64 as i64,
-                0xFFFFFF08FFFF06FFu64 as i64, 0xFF04FFFF02FFFF00u64 as i64);
-        let b_shuffle_mask = _mm256_set_epi64x(0xFFFF09FFFF07FFFFu64 as i64, 0x05FFFF03FFFF01FFu64 as i64,
-                0xFFFF09FFFF07FFFFu64 as i64, 0x05FFFF03FFFF01FFu64 as i64);
-        let c_shuffle_mask = _mm256_set_epi64x(0xFF08FFFF06FFFF04u64 as i64, 0xFFFF02FFFF00FFFFu64 as i64,
-                0xFF08FFFF06FFFF04u64 as i64, 0xFFFF02FFFF00FFFFu64 as i64);
+        let a_shuffle_mask = _mm256_set_epi64x(0xFFFFFF08FFFF06FFu64 as i64, 0xFF04FFFF02FFFF00u64 as i64, 0xFFFFFF08FFFF06FFu64 as i64, 0xFF04FFFF02FFFF00u64 as i64);
+        let b_shuffle_mask = _mm256_set_epi64x(0xFFFF08FFFF06FFFFu64 as i64, 0x04FFFF02FFFF00FFu64 as i64, 0xFFFF08FFFF06FFFFu64 as i64, 0x04FFFF02FFFF00FFu64 as i64);
+        let c_shuffle_mask = _mm256_set_epi64x(0xFF08FFFF06FFFF04u64 as i64, 0xFFFF02FFFF00FFFFu64 as i64, 0xFF08FFFF06FFFF04u64 as i64, 0xFFFF02FFFF00FFFFu64 as i64);
         let permute_mask = _mm256_set_epi32(7, 7, 6, 5, 4, 2, 1, 0);
         let lut = {
             let mut lut = 0;
@@ -255,6 +255,7 @@ pub fn bits_to_n2_pdep(bits: &[u64], len: usize) -> Vec<u8> {
 
             // eliminate gap created to prevent lane crossing
             let v = _mm256_permutevar8x32_epi32(abc, permute_mask);
+
             // convert bits to nucleotide characters
             let v = _mm256_shuffle_epi8(lut, v);
 

@@ -1,4 +1,4 @@
-# cute-nucleotides
+# cute-nucleotides 🧬💻
 Cute tricks for efficiently encoding and decoding nucleotides.
 
 ## Running
@@ -41,10 +41,10 @@ These benefits make this encoding technique very commonly used. The natural ques
 encoding and decoding be done if we squeeze every last cycle out of my CPU? Spoiler: we can go faster
 than `memcpy` (`std::ptr::copy_nonoverlapping` in Rust).
 
-In general, we can avoid costly branches, reduce data dependencies, use undiscernible magic numbers,
+In general, we can avoid costly branches, reduce data dependencies, use indiscernible magic numbers,
 and exploit special vectorized instructions for maximum speed.
 
-## Nucleotides to bits conversion
+## Encoding 🧬➡️🔟
 The goal here is fast, case-insensitive conversion of a string of nucleotides to pairs of bits:
 `{A, T/U, C, G} -> {00, 10, 01, 11}`. Here, I give a brief overview of every method that I implemented:
 
@@ -74,9 +74,10 @@ the AVX2 repertoire, so the `_mm256_movemask_epi8` instruction is one of the few
 powerful: it extracts the most significant bit out of each byte in a vector, and packs them into a 32-bit
 integer. We can do this twice, along with shifting the bits, to extract two bits out of every single byte.
 The only problem is that we have to interleave the bits from the two 32-bit integers we get. This
-interleaving can be done using the BMI2 `_pdep_u64` instruction, which is used to deposit bits at every
-other position in the final 64-bit integer. Both `_mm256_movemask_epi8` and `_pdep_u64` have throughputs of
-one per cycle on modern CPUs, so they are quite fast.
+interleaving can be done using the BMI2 `_pdep_u64` instruction (described in a blog
+[post](https://lemire.me/blog/2018/01/08/how-fast-can-you-bit-interleave-32-bit-integers/) by Daniel Lemire), which
+is used to deposit bits at every other position in the final 64-bit integer. Both `_mm256_movemask_epi8` and
+`_pdep_u64` have throughputs of one per cycle on modern CPUs, so they are quite fast.
 
 * **n_to_bits_mul (AVX2)**. Surprisingly, multiplication can be used as a fast bit-level shuffle operation.
 Crazy, right? Here's an example, where we want to create the binary number `dcba00` from `dc00ba` (`a`, `b`, `c`,
@@ -105,7 +106,7 @@ truncation and shuffles are used instead of a mask):
     AVX2 provides a way for eight multiplications to happen simultaneously! Compared to the other methods, this method can be
     easily implemented without vector instructions, on just 32-bit words, and it does not require BMI2 support.
 
-## Bits to nucleotides conversion
+## Decoding 🔟➡️🧬
 When converting bits to nucleotides, the goal is to unpack each byte with four nucleotides of two bits each into 32 bits.
 We need an extra length parameter, since we do not know when the sequence of bits terminates. Here is an overview of
 the implemented methods:
@@ -157,15 +158,89 @@ in action to shuffle `0000dcba` into `00dc00ba` (`a`, `b`, `c`, and `d` are any 
 
 ## Cuter algorithms for converting undetermined nucleotides to bits
 ### More motivation
+In some cases, it is important to keep track of an extra "undetermined nucleotide" represented with `N`, in addition to the
+typical `{A, T, C, G}` nucleotides. Usually, this arises from ambiguities in sequencing, and the exact nucleotide cannot be
+determined. In some sequence alignment applications, it may be beneficial to keep track of a gap character represented with
+`-`. Regardless, it is important to keep track of an extra character in addition to the four common nucleotides. In the
+experiments, we will consider the problem of encoding `{A, T/U, C, G, N}` (case-insensitive) to bits.
 
+### Encoding 🧬➡️🔟
+Unlike the easy encoding step with four nucleotides, the five nucleotide encoding is slightly more involved. I worked on this
+way back in 10th grade, but cute vector instructions made me revisit this. Anyways, the simple naive method is to encode each
+nucleotide to three bits instead of two bits. However, this is a bit of a waste given that an extra bit is necessary to
+represent a single extra nucleotide. A better way is to encode three nucleotides into seven bits. The seven bit encoding is
+just the three nucleotides expressed in base 5 after they are mapped to numbers from 0 to 4. For example, given the three
+nucleotides `a`, `b`, and `c`, we get `encoding = c * 5^2 + b * 5^1 + a * 5^0`. This gives a number from 0 to 124, which fits
+into 7 bits. Its possible to use the rest of the numbers 125-127 to indicate the end of an encoded sequence, but we take the
+easy route and just separately save the length of the encoded sequence. In summary, we convert triplets of nucleotides to 7
+bits each, and then pack 9 of those 7-bit chunks into a single 64-bit integer. For every three nucleotides, this takes only
+7 bits, instead of 9 bits with the naive method, where each nucleotide is encoded as three bits. We will now discuss the
+implemented algorithms:
 
-### Nucleotides to bits conversion
+* **n_to_bits2_lut**. This is a straightforward scalar implementation: read in three nucleotides, use the equation
+`encoding = c * 5^2 + b * 5^1 + a * 5^0`, then write out 7 bits to the current 64-bit integer.
 
+* **n_to_bits2_pext (AVX2 and BMI2)**. Alright, this gets a bit complicated. First of all, we map 27 nucleotide ASCII characters
+to integers between 0 and 4. After this, the easiest method is to do some sort of transpose, separating each nucleotide from each
+triplet into different vectors. We would have three vectors of 9 nucleotides each, and we can multiply each vector by `5^2`, `5^1`,
+or `5^0`, and then vertically add them all to calculate the encoding based on the formula. However, there is a triplet of nucleotides
+that cross the 128-bit lanes, so we cannot directly shuffle bytes to line up the three nucleotides in each vector for vertical
+addition, as the `_mm256_shuffle_epi8` instruction cannot cross lanes. This means that we need a lane-crossing permute with
+`_mm256_permutevar8x32_epi32` to move bytes across the lane boundary. Finally, we need to ensure that each nucleotide is padded to
+16 bits, because there is no 8-bit multiply in the AVX2 instruction set. Once we get our encoded 7 bits for every three nucleotides,
+we can use `_pext_u64` to back 9 of those 7-bit chunks into a single 64-bit integer. Sounds pretty cool! This seems pretty much optimal,
+right? Wrong. I realized that the `_mm256_addubs_epi16` instruction existed, which does vertical multiplies and then adds pairs of
+adjacent products horizontally. This means that instead of splitting each 27 byte vector into three vectors of 9 bytes each, we can
+split it into two and use `_mm256_addubs_epi16` to multiply one vector by both `5^2` and `5^1` and add horizontally (`c * 5^2 +
+b * 5^1`) in a single step, and then vertically adding the other vector (`a * 5^0`). This leads to a nice 11% speedup over transposing
+into three vectors of 9 nucleotide bytes each. Unfortunately, since we are dealing with with chunks of 27 bytes with AVX2 vectors of
+at most 32 bytes, we have to use awkward unaligned loads.
 
-### Bits to nucleotides conversion
+### Decoding 🔟➡️🧬
+When decoding a triplet of nucleotides, we need integer divisions and modulos:
+```
+encoding = c * 5^2 + b * 5^1 + a * 5^0
+a = encoding % 5
+b = (encoding / 5^1) % 5
+c = encoding / 5^2
+```
+Absolutely not fun at all. Divisions and modulos are very, very slow compared to addition or multiplication. The AVX2 instruction set
+does not even have integer division operations. To make use of floating point division, the each integer has to be converted into 32-bit
+floats, which also isn't fun. There is a solution, which we will see very soon. Our implemented algorithms are the following:
 
+* **bits_to_n2_lut**. Very basic implementation, where 7 bits are read in and we do division/modulos to get three nucleotides out. A
+simple lookup table is used to convert the integers (from 0 to 4) to characters for each nucleotide.
 
-## Cute speedups in cute micro-benchmarks
+* **bits_to_n2_pdep**. First, we use pdep to distribute each 7-bit chunk to 8-bit chunks. This will allow byte-level shuffles to work.
+We place five 8-bit chunks in the high lane and four 8-bit chunks in the low lane of a 256-bit vector. This will help us avoid
+lane-crossing operations. Additionally, we zero-extend 8-bit chunks to 16-bit chunks. Now, it is time to somehow do vector divisions and
+modulos. For division, the idea is to use multiplication by a reciprocal (represented as a fixed-point number) instead of division:
+
+    ```
+    n / d = high_16_bits(n * d'), where
+    d' = 2^16 / d + 1
+    ```
+
+    Note that `d'` is a constant value, since in this case `d = 5^1` or `d = 5^2`, and multiplying two 16-bit integers results in a 32-bit
+    product. For division, we can multiply the quotient by the divisor and subtract that product from the original `n`:
+
+    ```
+    n % d = n - high_16_bits(n * d') * d
+    ```
+
+    However, Daniel Lemire [proposed](https://lemire.me/blog/2019/02/08/faster-remainders-when-the-divisor-is-a-constant-beating-compilers-and-libdivide/)
+    a faster and more direct method, which uses the low bits of the product after multiplying by the reciprocal of the divisor in order to divide:
+
+    ```
+    n % d = high_16_bits(low_16_bits(n * d') * d)
+    ```
+
+    AVX2 conveniently provides the `_mm256_mullo_epi16` and `_mm256_mulhi_epu16` instructions, which allow for easy truncation of the high/low
+    bits of the product. Using Daniel Lemire's method provides a ~5% speedup. The last step is to interleave the three vectors that were created
+    through these division/modulo operations, use `_mm256_permutevar8x32_epi32` to pack the bytes into a contiguous 27-byte chunk, and map the
+    nucleotide integers from 0 to 4 to actual ASCII characters.
+
+## Cute speedups in cute micro-benchmarks 📈
 All benchmarks were ran on a Intel Core i9-9880H (Coffee Lake-H) CPU with a clock rate of 2.3 Ghz. Run times were measured
 on byte strings with 40,000 nucleotides. For shorter strings, the speedup of vectorized methods should be less noticeable
 due to overhead. Recall that the lookup table (`lut`) methods are the naive, scalar algorithms.
@@ -204,12 +279,11 @@ vectors.
 | n_to_bits2_lut           | 1.7887 GiB/s     |
 | **n_to_bits2_pext**      | **11.787 GiB/s** |
 | bits_to_n2_lut           | 1.3751 GiB/s     |
-| **bits_to_n2_pdep**      | 10.175 GiB/s     |
+| **bits_to_n2_pdep**      | **10.175 GiB/s** |
 
 For encoding and decoding undetermined nucleotides, the vectorized algorithms provide clear speedups over the lookup-table-based
 naive methods.
 
-This was an insightful experiment that unvealed many bit twiddling tricks. If these tricks were implemented into software tools,
-then encoding/decoding DNA/RNA sequences should not be a bottleneck. In fact, it should lead to nontrivial memory savings, if
-encoded binary strings are converted to nucleotides on the fly when they are needed. Unfortunately, its probably not possible to
-reach the lofty 30 GiB/s throughput in practice, due to memory access bottlenecks.
+This was an insightful experiment that unvealed many bit twiddling tricks. These tricks should lead to nontrivial memory savings
+without a significant speed penalty. Unfortunately, its probably not possible to reach the lofty 30 GiB/s throughput in practice,
+due to memory access bottlenecks.

@@ -339,9 +339,10 @@ First, we compare the throughputs of the algorithms for converting nucleotides t
 | n_to_bits_mul          | 25.286 GiB/s     |
 | memcpy                 | 23.599 GiB/s     |
 
-The winner is `n_to_bits_movemask`, beating even `memcpy` (`std::ptr::copy_nonoverlapping`). Note that all methods
-(including `memcpy`) allocate memory for the output first, which actually takes a nontrivial amount of time. In practice,
-`n_to_bits_mul` is probably the most flexible method for different platforms that is fast enough.
+The winner is `n_to_bits_movemask`, beating even `memcpy` (using `std::ptr::copy_nonoverlapping` to just make a copy of the entire byte string).
+Note that all methods (including `memcpy`) allocate memory for the output first, which actually takes a nontrivial amount of time. This is slightly unfair
+to `memcpy`, since it must allocate more memory to fit the entire byte string. In practice, `n_to_bits_mul` is probably the most flexible method for different
+platforms that is fast enough.
 
 The decoding operation of converting bits to nucleotides shows a more dramatic difference between the winner and the other
 methods:

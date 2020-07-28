@@ -111,16 +111,16 @@ truncation and shuffles are used instead of a mask):
     ```
     dcba0000 = 00dc00ba * 00010100
 
-          00dc00ba
-    *     00010100
-    --------------
-        00dc00ba
-    + 00dc00ba      shift and add
-    --------------
-        dcdcbaba
-    &   0011110000  mask out extraneous bits
-    --------------
-          dcba0000
+           00dc00ba
+    *      00010100
+    ---------------
+         00dc00ba
+    +  00dc00ba      multiply = shift and add
+    ---------------
+         dcdcbaba
+    &    0011110000  mask out extraneous bits
+    ---------------
+           dcba0000
     ```
 
     Multiplication by a constant is just shifts to where the bits are turned on in the constant and vertically adding.
@@ -243,15 +243,19 @@ we can use `_pext_u64` to back 9 of those 7-bit chunks into a single 64-bit inte
     which denotes each vector as a list of bytes:
 
     ```
-    shuffle [f, e, d, c, b, a] -> [0, 0, f, e, c, b] and [0, 0, 0, d, 0, a]
+    First,
 
-    _mm256_addubs_epi16([0, 0, f, e, c, b], [0, 0, 5^2, 5^1, 5^2, 5^1])
+        shuffle [f, e, d, c, b, a] -> [0, 0, f, e, c, b] and [0, 0, 0, d, 0, a]
 
-    = [0, 0, f * 25, e * 5, c * 25, b * 5] -> [0, 0, 0, f * 5^2 + e * 5^1, 0, c * 5^2 + b * 5^1]
+    Next,
 
-    [0, 0, 0, f * 5^2 + e * 5^1, 0, c * 5^2 + b * 5^1] + [0, 0, 0, d, 0, a]
+        _mm256_addubs_epi16([0, 0, f, e, c, b], [0, 0, 5^2, 5^1, 5^2, 5^1])
+      = [0, 0, f * 25, e * 5, c * 25, b * 5] -> [0, 0, 0, f * 5^2 + e * 5^1, 0, c * 5^2 + b * 5^1]
 
-    = [0, 0, 0, f * 5^2 + e * 5^1 + a, 0, c * 5^2 + b * 5^1 + a]
+    Finally,
+
+        [0, 0, 0, f * 5^2 + e * 5^1, 0, c * 5^2 + b * 5^1] + [0, 0, 0, d, 0, a]
+      = [0, 0, 0, f * 5^2 + e * 5^1 + d, 0, c * 5^2 + b * 5^1 + a]
     ```
 
     Each character represents an arbitrary byte. This technique leads to a nice 11% speedup over transposing into three vectors of 9
@@ -360,7 +364,7 @@ naive methods.
 Let's do a quick back-of-the-envelop calculation: processing data at ~30 GiB/s means that we only spend `1s / (30GiB / 32B) = ~1 ns` for
 every 32-byte chunk of data. One nanosecond is 2-5 cycles for a 2.3 GHz clock rate (4.8 GHz turbo boost) CPU. How could this be? This
 should represent the time taken for one iteration of the `bits_to_n_shuffle` [loop](src/n_to_bits.rs#L280-L298). Making the overly simplistic assumption
-that one instruction takes one cycle to execute, and everything is in the CPU cache, then each iteration should take maybe 9-10+ cycles, due to all
+that one instruction takes one cycle to execute in sequence, and everything is in the CPU cache, then each iteration should take maybe 9-10+ cycles, due to all
 the operations we are doing! The answer is that CPUs are complex, and at best we can only get an approximation of what it is doing without running the code.
 
 A decent answer is that since each iteration in our loop operates on independent data, and there should be a decent number of iterations, we only

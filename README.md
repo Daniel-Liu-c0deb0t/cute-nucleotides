@@ -40,15 +40,18 @@ compression schemes. Random access is ok.
 These benefits make this encoding technique very commonly used in software tools. The natural question is: how fast
 can encoding and decoding be done if we squeeze every last cycle out of my CPU? Spoiler: we can go faster
 than `memcpy` (`std::ptr::copy_nonoverlapping` in Rust). In general, we avoid costly branches, reduce data dependencies,
-use indiscernible magic numbers, and exploit special vectorized instructions for maximum efficiency.
+use indiscernible magic numbers, and exploit special vectorized instructions for maximum efficiency. In the experiments, I compare
+many different techniques for encoding and decoding.
 
 In addition to an empirical investigation on the best methods for encoding/decoding DNA, I also hope that this could
 be a good resource for some bit-twiddling micro-optimization tricks. Helpful resources that inspired me
 are Daniel Lemire's [blog](https://lemire.me/blog/), Geoff Langdale's [blog](https://branchfree.org/), literally all
 of Peter Cordes's [StackOverflow](https://stackoverflow.com/users/224132/peter-cordes) answers, the
 [Bit Twiddling Hacks](https://graphics.stanford.edu/~seander/bithacks.html) page by Sean Eron Anderson, and the *very*
-detailed instruction tables and optimization guide on Agner Fog's [website](https://www.agner.org/optimize/). Being a
-fresh high school graduate, I probably can't compete against them, but I can do my best.
+detailed instruction tables and optimization guide on Agner Fog's [website](https://www.agner.org/optimize/).
+
+This experiment was inspired by Pierre Marijon's Optimization Friday [work](https://github.com/natir/fbio) and our discussion
+on Twitter.
 
 ## Encoding 🧬 ➡️ 🔟
 The goal here is fast, case-insensitive conversion of a string of nucleotides to pairs of bits:
@@ -72,12 +75,12 @@ at the ASCII table for a bit, you will realize that the second and third bits of
 is exactly the two bits that we want:
 
     ```
-        ASCII      mask   bits
-    A = 01000001 & 110  = 00000 00 0
-    T = 01010100 & 110  = 00000 10 0
-    U = 01010101 & 110  = 00000 10 0
-    C = 01000011 & 110  = 00000 01 0
-    G = 01000111 & 110  = 00000 11 0
+        ASCII      mask       bits
+    A = 01000001 & 00000110 = 00000 00 0
+    T = 01010100 & 00000110 = 00000 10 0
+    U = 01010101 & 00000110 = 00000 10 0
+    C = 01000011 & 00000110 = 00000 01 0
+    G = 01000111 & 00000110 = 00000 11 0
     ```
 
     Additionally, the second and third bits for the `U` and `T` characters are the same! Now, if only there is
@@ -101,7 +104,8 @@ The only problem is that we have to interleave the bits from the two 32-bit inte
 interleaving can be done using the BMI2 `_pdep_u64` instruction (described in a blog
 [post](https://lemire.me/blog/2018/01/08/how-fast-can-you-bit-interleave-32-bit-integers/) by Daniel Lemire), which
 is used to deposit bits at every other position in the final 64-bit integer. Both `_mm256_movemask_epi8` and
-`_pdep_u64` have throughputs of one per cycle on modern CPUs, so they are quite fast.
+`_pdep_u64` have throughputs of one per cycle on modern CPUs, so they are quite fast. If the `_pdep_u64` instruction
+is not available, and a lookup-table-based bit interleave algorithm is used, then this method would probably be slower.
 
 * **n_to_bits_mul (AVX2)**. Surprisingly, multiplication can be used as a fast bit-level shuffle operation.
 Crazy, right? Here's an example, where we want to create the binary number `dcba0000` from `00dc00ba` (`a`, `b`, `c`,
@@ -117,8 +121,8 @@ truncation and shuffles are used instead of a mask):
          00dc00ba
     +  00dc00ba      multiply = shift and add
     ---------------
-         dcdcbaba
-    &    0011110000  mask out extraneous bits
+       00dcdcbaba
+    &  000011110000  mask out extraneous bits
     ---------------
            dcba0000
     ```
@@ -126,9 +130,10 @@ truncation and shuffles are used instead of a mask):
     Multiplication by a constant is just shifts to where the bits are turned on in the constant and vertically adding.
     If there aren't any potential overlaps between one bits after shifting, then there won't be any carries to mess up
     the result. Therefore, multiplication by a specific constant number with selected bits turned on is a quick bit-level
-    shuffle, and it can be used to pack four pairs of bits into a single byte with just a single 32-bit multiply. Additionally,
-    AVX2 provides a way for eight multiplications to happen simultaneously! Compared to the other methods, this method can be
-    easily implemented without vector instructions, on just 32-bit words, and it does not require BMI2 support.
+    shuffle, and it can be used to pack four pairs of bits into a single byte with just a single 32-bit multiply. On modern CPUs,
+    multiplications should be very cheap. Additionally, AVX2 provides a way for eight multiplications to happen simultaneously!
+    Compared to the other methods, this method can be easily implemented without vector instructions, on just 32-bit words,
+    and it does not require BMI2 support.
 
 ## Decoding 🔟 ➡️ 🧬
 When converting bits to nucleotides, the goal is to unpack each byte with four nucleotides of two bits each into 32 bits.
@@ -139,7 +144,7 @@ Encoding    =                      001011
 ASCII       =  01000001 01010100 01000111
 Nucleotides =         A        T        G
 ```
-Here is an overview of the implemented methods:
+The decoding methods use similar techniques to the encoding methods. Here is an overview of the implemented methods:
 
 * **bits_to_n_lut**. The most basic implementation. Two bits in, one byte character out. A small lookup table is used to
 convert bits to characters.
@@ -160,7 +165,7 @@ two bits `a` and `b`, the lookup table will map `00ba` and `ba00` to the same nu
 * **bits_to_n_pdep (AVX2 and BMI2)**. The `_pdep_u64` instruction, which distributes bits to specific locations based on a
 mask is the perfect instruction for the task of depositing two bits that represent one nucleotide to the start of each byte.
 After depositing the bits in chunks of 64-bits, the last step is to do a shuffle lookup to convert those bits to byte
-characters.
+characters. This should be pretty fast, but this involves an extra step to convert four 64-bit integers into a 256-bit vector.
 
 * **bits_to_n_clmul (SSSE3 and PCLMULQDQ)**. It is also possible to use multiplication to distribute bits to the start of
 each byte. However, in this case, it is difficult to distribute each byte (that contains four nucleotides) to its correct
@@ -180,7 +185,7 @@ in action to shuffle `0000dcba` into `00dc00ba` (`a`, `b`, `c`, and `d` are any 
               0000dcba
     ^       0000dcba    XOR instead of addition!
     ------------------
-          000000dc??ba  we don't care about '?' bits
+          000000dc??ba  we don't care about '?' bits, as
     &     000000110011  they won't affect other bits
     ------------------
               00dc00ba
@@ -245,12 +250,14 @@ we can use `_pext_u64` to back 9 of those 7-bit chunks into a single 64-bit inte
     ```
     First,
 
-        shuffle [f, e, d, c, b, a] -> [0, 0, f, e, c, b] and [0, 0, 0, d, 0, a]
+        shuffle [f, e, d, c, b, a]
+     -> [0, 0, f, e, c, b] and [0, 0, 0, d, 0, a]
 
     Next,
 
         _mm256_addubs_epi16([0, 0, f, e, c, b], [0, 0, 5^2, 5^1, 5^2, 5^1])
-      = [0, 0, f * 25, e * 5, c * 25, b * 5] -> [0, 0, 0, f * 5^2 + e * 5^1, 0, c * 5^2 + b * 5^1]
+      = [0, 0, f * 5^2, e * 5^1, c * 5^2, b * 5^1]
+     -> [0, 0, 0, f * 5^2 + e * 5^1, 0, c * 5^2 + b * 5^1]
 
     Finally,
 
@@ -348,7 +355,7 @@ methods:
 
 Giving these results, it seems like `bits_to_n_clmul`, which uses SSE and PCLMULQDQ instructions to handle 128-bit vectors,
 won't be able to beat `bits_to_n_shuffle` even if `bits_to_n_shuffle` is translated to use 128-bit vectors instead of 256-bit
-vectors.
+vectors. Oh well.
 
 | Undetermined nucleotides | Throughput       |
 |--------------------------|------------------|
@@ -362,17 +369,17 @@ naive methods.
 
 ## Discussion
 Let's do a quick back-of-the-envelop calculation: processing data at ~30 GiB/s means that we only spend `1s / (30GiB / 32B) = ~1 ns` for
-every 32-byte chunk of data. One nanosecond is 2-5 cycles for a 2.3 GHz clock rate (4.8 GHz turbo boost) CPU. How could this be? This
-should represent the time taken for one iteration of the `bits_to_n_shuffle` [loop](src/n_to_bits.rs#L280-L298). Making the overly simplistic assumption
-that one instruction takes one cycle to execute in sequence, and everything is in the CPU cache, then each iteration should take maybe 9-10+ cycles, due to all
-the operations we are doing! The answer is that CPUs are complex, and at best we can only get an approximation of what it is doing without running the code.
+every 32-byte chunk of data. One nanosecond is 2-5 cycles for a 2.3 GHz clock rate (4.8 GHz turbo boost) CPU. This
+should represent the time taken for one iteration of the `bits_to_n_shuffle` [loop](src/n_to_bits.rs#L280-L298). If we make the overly simplistic assumption
+that one instruction takes one cycle to execute in sequence, and everything is in the CPU cache, then we expect each iteration to take maybe 9-10+ cycles, due to all
+the operations we are doing! How could this be?
 
-A decent answer is that since each iteration in our loop operates on independent data, and there should be a decent number of iterations, we only
+A high-level answer is that since each iteration in our loop operates on independent data, and there are a large number of iterations, we only
 need to care about throughput (how many cycles it takes before we are able to launch a new instruction), instead of latency (how many cycles it
 takes to get the output data of some instruction). The CPU can execute other instructions while waiting for some instructions to finish and output
-their result. But this sketch of what is going on is not entirely accurate.
+their result. CPUs can also magically start multiple instructions per cycle. This allows it to be super fast.
 
-More specifically, modern CPUs have many execution ports, that handle different micro-operations (each instruction can be one or more micro-operations).
+More specifically, modern CPUs have many execution ports that handle different micro-operations (each instruction can be one or more micro-operations).
 Some common instructions, like bitwise AND, OR, or addition, are a single micro-operation that can be executed by one of many ports, while vector shuffles are bottlenecked
 on a single port on recent Intel CPUs. Each execution port can start a micro-operation every cycle, but multiple micro-operations can be launched in the same clock
 cycle if they use different ports. This means that is may be possible to do, for example, four vector additions in the same cycle on recent Intel CPUs,
@@ -380,20 +387,20 @@ if there are no data dependencies. However, there is also a limit on the number 
 Intel CPUs, around four micro-operations total can be executed each cycle. Also, it is possible for combinations of instructions, like load-and-then-vector-add, to be fused into
 one micro-operation. You get the idea: the reason why a piece of code is fast or slow in practice is very complicated. However, we can reasonably
 assume that `bits_to_n_shuffle`'s iterations are fast due to the CPU's out-of-order execution capability across multiple iterations of the loop.
-In my code, I did not focus too heavily on optimizing CPU out-of-order-execution, but instead on the more general algorithms.
+In my code, I did not focus too heavily on optimizing CPU out-of-order-execution, but instead I focused more on general algorithms.
 
 Usually, you do not need to worry about these details (or other more subtle CPU magic). Cache misses, unpredictable branches, long dependency chains,
 lots of (not inlined) function calls, wasteful memory allocations, subpar algorithms, etc. are much more significant bottlenecks in most programs.
 
 Note: In general, looking at the Rust SIMD code won't do us any good, since LLVM might output different assembly instructions and apply different
-optimizations. For example, one common trick is zeroing a register by XORing with itself.
+optimizations.
 
 ## Conclusion
 This was an insightful experiment that unvealed many bit twiddling tricks. These tricks should lead to nontrivial memory savings
 without a significant speed penalty. Unfortunately, its probably not possible to reach the lofty 30 GiB/s throughput in practice,
 due to memory access bottlenecks.
 
-Note that there is another encoding technique that I have explored before: mapping `{A, T, C, G} -> {110, 011, 000, 101}`. These
-encoding bits are *pairwise equidistant* under bitwise Hamming distance (every pair pair of encodings differ by two bits). This allows
-nucleotide Hamming distance calculations to be done with just three instructions: an XOR, a popcount, and a right shift to divide by two.
-For short strings, this is highly efficient when many Hamming distance calculations are needed.
+Note that there is another interesting encoding technique that I have explored before: mapping `{A, T, C, G} -> {110, 011, 000, 101}`. These
+encoding bits are *pairwise equidistant* under bitwise Hamming distance (every pair of encodings differ by two bits). This allows
+nucleotide Hamming distance (number of different nucleotides) calculations to be done with just three instructions: an XOR, a popcount,
+and a right shift to divide by two. For short strings, this is highly efficient when many Hamming distance calculations are needed.

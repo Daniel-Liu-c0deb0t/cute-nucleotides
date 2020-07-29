@@ -1,5 +1,5 @@
 # cute nucleotides 🧬 💻
-Cute tricks for vectorized binary encoding and decoding of nucleotides.
+Cute tricks for SIMD vectorized binary encoding and decoding of nucleotides, in Rust.
 
 ## Running
 To run the tests, use cargo with a special flag telling it to target your CPU, for maximum efficiency.

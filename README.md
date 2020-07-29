@@ -240,12 +240,11 @@ addition, as the `_mm256_shuffle_epi8` instruction cannot cross lanes. This mean
 16 bits, because there is no straightforward 8-bit vector multiply instruction. Once we get our encoded 7 bits for every three nucleotides,
 we can use `_pext_u64` to back 9 of those 7-bit chunks into a single 64-bit integer.
 
-    Sounds pretty cool! This seems pretty much optimal,
-    right? Wrong. I realized that the `_mm256_addubs_epi16` instruction existed, which does vertical multiplies and then adds pairs of
-    adjacent products horizontally. This means that instead of splitting each 27 byte vector into three vectors of 9 bytes each, we can
-    split it into two and use `_mm256_addubs_epi16` to multiply one vector by both `5^2` and `5^1` and add horizontally (`c * 5^2 +
-    b * 5^1`) in a single step, and then vertically adding the other vector (`a * 5^0`). For a simplified example, consider the following,
-    which denotes each vector as a list of bytes:
+    Sounds pretty cool! This seems pretty much optimal, right? Wrong. I realized that the `_mm256_addubs_epi16` instruction existed, which
+    does vertical multiplies and then adds pairs of adjacent products horizontally. This means that instead of splitting each 27 byte vector
+    into three vectors of 9 bytes each, we can split it into two and use `_mm256_addubs_epi16` to multiply one vector by both `5^2` and `5^1`
+    and add horizontally (`c * 5^2 + b * 5^1`) in a single step, and then vertically adding the other vector (`a * 5^0`). For a simplified example,
+    consider the following, which denotes each vector as a list of bytes:
 
     ```
     First,
@@ -268,7 +267,8 @@ we can use `_pext_u64` to back 9 of those 7-bit chunks into a single 64-bit inte
     Each character represents an arbitrary byte. This technique leads to a nice 11% speedup over transposing into three vectors of 9
     nucleotide bytes each. Unfortunately, since we are dealing with with chunks of 27 bytes with AVX2 vectors of at most 32 bytes,
     we have to use awkward unaligned loads. On modern CPUs, unaligned vector loads/stores to memory locations not a multiple of 32
-    shouldn't result in massive speed penalties.
+    shouldn't result in massive speed penalties. It might be possible to use multiplication or bit shifts instead of `_pext_u64`, but
+    they may only yield speedups when `_pext_u64` is very slow on a certain CPU.
 
 ### Decoding 🔟 ➡️ 🧬
 Here is an example of decoding a triplet of nucleotides:
@@ -324,7 +324,7 @@ modulos. For division, the idea is to use multiplication by a reciprocal (repres
     nucleotide integers from 0 to 4 to actual ASCII characters.
 
 ## Cute speedups in cute micro-benchmarks 📈
-All benchmarks were ran on a Intel Core i9-9880H (Coffee Lake-H) CPU with a clock rate of 2.3 Ghz (4.8 Ghz turbo boost). Run times were measured
+All benchmarks were ran on a Intel Core i9-9880H (Coffee Lake-H) CPU with a clock rate of 2.3 GHz (4.8 GHz turbo boost). Run times were measured
 on byte strings with 40,000 nucleotides. For shorter strings, the speedup of vectorized methods should be less noticeable
 due to overhead. Recall that the lookup table (`lut`) methods are the naive, scalar algorithms.
 

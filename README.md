@@ -238,7 +238,7 @@ that cross the 128-bit lanes, so we cannot directly shuffle bytes to line up the
 addition, as the `_mm256_shuffle_epi8` instruction cannot cross lanes. This means that we need a lane-crossing permute with
 `_mm256_permutevar8x32_epi32` to move bytes across the lane boundary. Finally, we need to ensure that each nucleotide is padded to
 16 bits, because there is no straightforward 8-bit vector multiply instruction. Once we get our encoded 7 bits for every three nucleotides,
-we can use `_pext_u64` to back 9 of those 7-bit chunks into a single 64-bit integer.
+we can use `_pext_u64` to pack 9 of those 7-bit chunks into a single 64-bit integer.
 
     Sounds pretty cool! This seems pretty much optimal, right? Wrong. I realized that the `_mm256_addubs_epi16` instruction existed, which
     does vertical multiplies and then adds pairs of adjacent products horizontally. This means that instead of splitting each 27 byte vector

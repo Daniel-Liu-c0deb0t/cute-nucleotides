@@ -12,7 +12,7 @@ RUSTFLAGS="-C target-cpu=native" cargo bench
 ```
 
 These should all run on x86 CPUs that support AVX2 and BMI2 instructions (so modern Intel and AMD CPUs).
-Many functions are not written in a cross-platform way, since I'm too lazy to do so for mere test programs.
+Note that many functions are not written in a cross-platform way.
 
 **Warning: there is a lot of unsafe code! Your eyes may trick you into thinking that the code is written
 in C. No, it is (unfortunately) 100% organic Rust. Read it at your own risk.**

@@ -166,36 +166,29 @@ pub fn n_to_bits_shift(n: &[u8]) -> Vec<u64> {
 }
 
 /// Encode `{A, T/U, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
-/// by using a vectorized method with the `movemask` instruction and interleaving bits using the `pdep` instruction.
+/// by using a vectorized method with the `movemask` instruction.
 ///
-/// Requires AVX2 and BMI2 support.
+/// Requires AVX2 support.
 pub fn n_to_bits_movemask(n: &[u8]) -> Vec<u64> {
     let ptr = n.as_ptr() as *const __m256i;
     let end_idx = n.len() >> 5;
     let len = end_idx + if n.len() & 31 == 0 {0} else {1};
 
-    let lo_mask = 0x5555555555555555u64;
-    let hi_mask = 0xAAAAAAAAAAAAAAAAu64;
-
     unsafe {
         let layout = alloc::Layout::from_size_align_unchecked(len << 3, 8);
         let res_ptr = alloc::alloc(layout) as *mut u64;
-
         for i in 0..end_idx as isize {
-            let v = _mm256_loadu_si256(ptr.offset(i));
+            let v = _mm256_permute4x64_epi64(_mm256_loadu_si256(ptr.offset(i)), 0xD8);
 
-            // shift the two important bits that represent each nucleotide to the end of each byte
-            let v1 = _mm256_slli_epi16(v, 6);
-            let v2 = _mm256_slli_epi16(v, 5);
+            // shift the bits that to id each nucleotide to the end of each byte
+            let hi = _mm256_slli_epi64(v, 5);
+            let lo = _mm256_slli_epi64(v, 6);
 
-            // get first two bits of each byte as two separate integers
-            let a = _mm256_movemask_epi8(v1) as u64;
-            let b = _mm256_movemask_epi8(v2) as u64;
+            // interleave bytes then extract the bit at the end of each byte
+            let a = (_mm256_movemask_epi8(_mm256_unpackhi_epi8(lo, hi)) as u32) as u64;
+            let b = (_mm256_movemask_epi8(_mm256_unpacklo_epi8(lo, hi)) as u32) as u64;
 
-            // interleave 32-bit integers to get a pair of bits for each nucleotide
-            let a = _pdep_u64(a, lo_mask);
-            let b = _pdep_u64(b, hi_mask);
-            *res_ptr.offset(i) = a | b;
+            *res_ptr.offset(i) = (a << 32) | b; // todo: _mm_stream_si64()?
         }
 
         if n.len() & 31 > 0 {

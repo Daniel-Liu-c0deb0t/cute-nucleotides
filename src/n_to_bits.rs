@@ -166,7 +166,7 @@ pub fn n_to_bits_shift(n: &[u8]) -> Vec<u64> {
 }
 
 /// Encode `{A, T/U, C, G}` from the byte string into pairs of bits (`{00, 10, 01, 11}`) packed into 64-bit integers,
-/// by using a vectorized method with the `movemask` instruction.
+/// by using a vectorized method with the `permute4x64`, `unpack`, and `movemask` instructions.
 ///
 /// Requires AVX2 support.
 pub fn n_to_bits_movemask(n: &[u8]) -> Vec<u64> {
@@ -178,17 +178,24 @@ pub fn n_to_bits_movemask(n: &[u8]) -> Vec<u64> {
         let layout = alloc::Layout::from_size_align_unchecked(len << 3, 8);
         let res_ptr = alloc::alloc(layout) as *mut u64;
         for i in 0..end_idx as isize {
-            let v = _mm256_permute4x64_epi64(_mm256_loadu_si256(ptr.offset(i)), 0xD8);
+            let v = _mm256_loadu_si256(ptr.offset(i));
 
-            // shift the bits that to id each nucleotide to the end of each byte
-            let hi = _mm256_slli_epi64(v, 5);
+            // permute because unpacks works on the low/high 64 bits in each lane
+            let v = _mm256_permute4x64_epi64(v, 0b11011000);
+
+            // shift each group of two bits for each nucleotide to the end of each byte
             let lo = _mm256_slli_epi64(v, 6);
+            let hi = _mm256_slli_epi64(v, 5);
 
             // interleave bytes then extract the bit at the end of each byte
-            let a = (_mm256_movemask_epi8(_mm256_unpackhi_epi8(lo, hi)) as u32) as u64;
-            let b = (_mm256_movemask_epi8(_mm256_unpacklo_epi8(lo, hi)) as u32) as u64;
+            let a = _mm256_unpackhi_epi8(lo, hi);
+            let b = _mm256_unpacklo_epi8(lo, hi);
 
-            *res_ptr.offset(i) = (a << 32) | b; // todo: _mm_stream_si64()?
+            // zero extend after movemask
+            let a = (_mm256_movemask_epi8(a) as u32) as u64;
+            let b = (_mm256_movemask_epi8(b) as u32) as u64;
+
+            *res_ptr.offset(i) = (a << 32) | b;
         }
 
         if n.len() & 31 > 0 {

@@ -107,6 +107,10 @@ is used to deposit bits at every other position in the final 64-bit integer. Bot
 `_pdep_u64` have throughputs of one per cycle on modern CPUs, so they are quite fast. If the `_pdep_u64` instruction
 is not available, and a lookup-table-based bit interleave algorithm is used, then this method would probably be slower.
 
+    **[aqrit](https://github.com/aqrit) has improved this method by getting rid of the `_pdep_u64` instruction
+    (which is slow on AMD CPUs) and replacing it with `_mm256_permute4x64_epi64` and the unpack lo/hi instructions to
+    interleave bytes *before* using `_mm256_movemask_epi8`!**
+
 * **n_to_bits_mul (AVX2)**. Surprisingly, multiplication can be used as a fast bit-level shuffle operation.
 Crazy, right? Here's an example, where we want to create the binary number `dcba0000` from `00dc00ba` (`a`, `b`, `c`,
 and `b` are any bits) by simply multiplying by a magic binary number and masking out extraneous bits (in practice,

@@ -17,6 +17,12 @@ Note that many functions are not written in a cross-platform way.
 **Warning: there is a lot of unsafe code! Your eyes may trick you into thinking that the code is written
 in C. No, it is (unfortunately) 100% organic Rust. Read it at your own risk.**
 
+There is an attempt to organize some of the code here into a library (currently unfinished) [here](https://github.com/natir/nuc2bit).
+There are also SIMD-accelerated implementations for finding nucleotide complements [here](https://github.com/natir/nuc2bit/blob/master/src/complement.rs),
+calculating Hamming distance [here](https://github.com/natir/nuc2bit/blob/master/src/hamming.rs),
+and checking if a string represents a valid nucleotide sequence [here](https://github.com/natir/nuc2bit/blob/master/src/check.rs).
+So many cute tricks!
+
 ## Motivation
 It turns out that when dealing with millions and billions of sequenced DNA/RNA data, a large amount
 of memory space is necessary (gasp!). Therefore, it is important to compress the DNA nucleotides

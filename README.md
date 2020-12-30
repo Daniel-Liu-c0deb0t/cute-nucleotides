@@ -22,6 +22,7 @@ There are also SIMD-accelerated implementations for finding nucleotide complemen
 calculating Hamming distance [here](https://github.com/natir/nuc2bit/blob/master/src/hamming.rs),
 and checking if a string represents a valid nucleotide sequence [here](https://github.com/natir/nuc2bit/blob/master/src/check.rs).
 So many cute tricks!
+I also implemented some of the tricks here in another project [here](https://github.com/10XGenomics/rust-debruijn/blob/master/src/bitops_avx2.rs).
 
 ## Motivation
 It turns out that when dealing with millions and billions of sequenced DNA/RNA data, a large amount
